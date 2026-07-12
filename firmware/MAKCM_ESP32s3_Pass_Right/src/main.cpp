@@ -47,6 +47,11 @@ void ipc_handle_frame(uint8_t type, uint8_t ep_addr, uint16_t seq,
     case FRAME_TARGET_RESET:
         pass_host.set_target_mounted(false);
         break;
+    case FRAME_PROBE_COMMAND:
+        if (len >= 1 && payload[0] == PROBE_CMD_HELLO) {
+            pass_host.probe_hello();
+        }
+        break;
     case FRAME_PING:
         extern bool ipc_send(uint8_t, uint8_t, uint16_t, const uint8_t *, uint16_t);
         ipc_send(FRAME_PING, 0, seq, nullptr, 0);
@@ -88,6 +93,9 @@ void setup() {
     if (n > 0) {
         ipc_send(FRAME_LOG, 0, 0, (const uint8_t *)boot_msg, (uint16_t)n);
     }
+#if PROBE_MODE
+    pass_host.probe_hello();
+#endif
 }
 
 void loop() {

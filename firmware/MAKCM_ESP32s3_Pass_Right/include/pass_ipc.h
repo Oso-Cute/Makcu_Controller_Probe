@@ -47,6 +47,7 @@ enum pass_ipc_type : uint8_t {
     FRAME_EP_OUT         = 0x12,
     FRAME_TARGET_MOUNTED = 0x13,  // Xbox/PC configured Left; Right may forward IN
     FRAME_TARGET_RESET   = 0x14,  // Xbox/PC reset/unmounted Left; pause IN forwarding
+    FRAME_PROBE_COMMAND  = 0x15,  // [u8 command] diagnostic probe control
 
     // Right → Left:
     FRAME_CTRL_IN_DATA   = 0x20,
@@ -59,6 +60,10 @@ enum pass_ipc_type : uint8_t {
 
     FRAME_LOG            = 0xF0,
     FRAME_PING           = 0xF1,
+};
+
+enum pass_ipc_probe_command : uint8_t {
+    PROBE_CMD_HELLO = 0x01,
 };
 
 enum pass_ipc_xfer_status : uint8_t {

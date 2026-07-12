@@ -95,5 +95,18 @@ physical descriptors at runtime. They are currently validated only for the
 MAKCM board and a downstream device presenting `VID_045E/PID_0B12` with GIP
 behavior. Other hardware or controller identities are experimental.
 
+## Controller compatibility probe
+
+For new controllers such as the GameSir G7 Pro, use the separate probe
+workflow under `tools/controller_probe/`. It builds dedicated `LEFT_PROBE` and
+`RIGHT_PROBE` images and creates a private developer ZIP plus a public-redacted
+ZIP. The normal tested firmware environments remain unchanged.
+
+Start with:
+
+```text
+tools\controller_probe\README.md
+```
+
 See `firmware/README.md` for image checksums and `FLASHING.md` for detailed
 flashing instructions.

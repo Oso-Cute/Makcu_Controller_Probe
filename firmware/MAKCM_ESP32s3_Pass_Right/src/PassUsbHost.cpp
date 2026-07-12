@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 
 extern bool ipc_send(uint8_t type, uint8_t ep_addr, uint16_t seq,
                      const uint8_t *payload, uint16_t len);
@@ -19,7 +20,7 @@ extern bool ipc_send(uint8_t type, uint8_t ep_addr, uint16_t seq,
 // COM3). Right's USB-Serial-JTAG is dead while host mode is active, so
 // this is the only visibility into Right's progress.
 static void R_LOG_fmt(const char *fmt, ...) {
-    char buf[160];
+    char buf[PROBE_MODE ? 240 : 160];
     va_list ap;
     va_start(ap, fmt);
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -30,10 +31,131 @@ static void R_LOG_fmt(const char *fmt, ...) {
 }
 #define R_LOG(...)  R_LOG_fmt(__VA_ARGS__)
 
+#define PROBE_SCHEMA_VERSION 1
+#define PROBE_RIGHT_BUILD_ID "makcu-right-probe-1"
+
+#if PROBE_MODE
+static const uint16_t PROBE_HEX_CHUNK = 32;
+
+static const char *probe_speed_name(usb_speed_t speed) {
+    return speed == USB_SPEED_LOW ? "low" : "full";
+}
+
+static const char *probe_ep_type_name(uint8_t attributes) {
+    switch (attributes & 0x03) {
+    case USB_TRANSFER_TYPE_CTRL:        return "control";
+    case USB_TRANSFER_TYPE_ISOCHRONOUS: return "isochronous";
+    case USB_TRANSFER_TYPE_BULK:        return "bulk";
+    case USB_TRANSFER_TYPE_INTR:        return "interrupt";
+    default:                            return "unknown";
+    }
+}
+
+// Chunk binary objects into parseable ASCII records. A 32-byte chunk keeps
+// each FRAME_LOG comfortably below the bounded R_LOG buffer while preserving
+// exact descriptor/control bytes for the PC collector.
+static void probe_log_blob(const char *record, const char *kind, uint32_t id,
+                           const uint8_t *data, uint16_t len) {
+    if (!data || len == 0) {
+        R_LOG("[PRB] BLOB record=%s kind=%s id=%lu off=0 total=0 hex=-",
+              record, kind, (unsigned long)id);
+        return;
+    }
+    for (uint16_t off = 0; off < len; off += PROBE_HEX_CHUNK) {
+        uint16_t take = (uint16_t)(len - off);
+        if (take > PROBE_HEX_CHUNK) take = PROBE_HEX_CHUNK;
+        char hex[PROBE_HEX_CHUNK * 2 + 1];
+        for (uint16_t i = 0; i < take; ++i) {
+            snprintf(hex + i * 2, sizeof(hex) - i * 2, "%02x", data[off + i]);
+        }
+        hex[take * 2] = 0;
+        R_LOG("[PRB] BLOB record=%s kind=%s id=%lu off=%u total=%u hex=%s",
+              record, kind, (unsigned long)id, (unsigned)off,
+              (unsigned)len, hex);
+    }
+}
+#endif
+
 static const char *TAG = "PassUsbHost";
 
 PassUsbHost pass_host;
 static portMUX_TYPE flow_lock = portMUX_INITIALIZER_UNLOCKED;
+
+void PassUsbHost::probe_hello() const {
+#if PROBE_MODE
+    R_LOG("[PRB] HELLO schema=%u side=R build=%s probe=%u ipc_baud=%lu",
+          (unsigned)PROBE_SCHEMA_VERSION, PROBE_RIGHT_BUILD_ID,
+          (unsigned)PROBE_MODE, (unsigned long)PASS_IPC_UART_BAUD);
+#else
+    (void)this;
+#endif
+}
+
+#if PROBE_MODE
+void PassUsbHost::probe_reset() {
+    probe_packet_id_ = 0;
+    probe_packet_samples_ = 0;
+    probe_premount_samples_ = 0;
+    probe_out_samples_ = 0;
+    probe_out_results_ = 0;
+    memset(probe_last_valid_, 0, sizeof(probe_last_valid_));
+    memset(probe_last_len_, 0, sizeof(probe_last_len_));
+    memset(probe_last_data_, 0, sizeof(probe_last_data_));
+}
+
+bool PassUsbHost::probe_should_log_in(uint8_t ep_addr, const uint8_t *data,
+                                      uint16_t len, bool mounted) {
+    if (!data || len == 0 || probe_packet_samples_ >= 128) return false;
+    const uint8_t slot = ep_addr & 0x0f;
+    uint16_t captured = len > sizeof(probe_last_data_[slot])
+                      ? (uint16_t)sizeof(probe_last_data_[slot]) : len;
+    bool changed = !probe_last_valid_[slot] ||
+                   probe_last_len_[slot] != captured ||
+                   memcmp(probe_last_data_[slot], data, captured) != 0;
+    memcpy(probe_last_data_[slot], data, captured);
+    probe_last_len_[slot] = (uint8_t)captured;
+    probe_last_valid_[slot] = true;
+
+    if (!mounted) {
+        if (probe_premount_samples_ >= 16) return false;
+        probe_premount_samples_++;
+    } else if (!changed) {
+        // Constant-rate HID/XInput pads can report at 1 kHz. Change-only
+        // sampling preserves user actions without swamping the 2 Mbps IPC.
+        return false;
+    }
+    probe_packet_samples_++;
+    return true;
+}
+
+void PassUsbHost::probe_log_packet(const char *direction, const char *phase,
+                                   uint8_t ep_addr, int status,
+                                   const uint8_t *data, uint16_t len) {
+    const uint32_t id = __atomic_add_fetch(&probe_packet_id_, 1,
+                                           __ATOMIC_RELAXED);
+    const int64_t t_us = esp_timer_get_time();
+    uint16_t captured = len > 64 ? 64 : len;
+    if (!data || captured == 0) {
+        R_LOG("[PRB] PKT id=%lu side=R dir=%s phase=%s ep=%02x status=%d t_us=%lld len=%u captured=0 off=0 total=0 hex=-",
+              (unsigned long)id, direction, phase, (unsigned)ep_addr, status,
+              (long long)t_us, (unsigned)len);
+        return;
+    }
+    for (uint16_t off = 0; off < captured; off += PROBE_HEX_CHUNK) {
+        uint16_t take = (uint16_t)(captured - off);
+        if (take > PROBE_HEX_CHUNK) take = PROBE_HEX_CHUNK;
+        char hex[PROBE_HEX_CHUNK * 2 + 1];
+        for (uint16_t i = 0; i < take; ++i) {
+            snprintf(hex + i * 2, sizeof(hex) - i * 2, "%02x", data[off + i]);
+        }
+        hex[take * 2] = 0;
+        R_LOG("[PRB] PKT id=%lu side=R dir=%s phase=%s ep=%02x status=%d t_us=%lld len=%u captured=%u off=%u total=%u hex=%s",
+              (unsigned long)id, direction, phase, (unsigned)ep_addr, status,
+              (long long)t_us, (unsigned)len, (unsigned)captured,
+              (unsigned)off, (unsigned)captured, hex);
+    }
+}
+#endif
 
 void PassUsbHost::lib_task(void *arg) {
     auto *self = static_cast<PassUsbHost *>(arg);
@@ -95,6 +217,9 @@ void PassUsbHost::begin() {
     xTaskCreatePinnedToCore(&PassUsbHost::lib_task,    "usb_lib",    8192, this, 5, &lib_task_,    1);
     xTaskCreatePinnedToCore(&PassUsbHost::client_task, "usb_client", 8192, this, 5, &client_task_, 1);
     ESP_LOGI(TAG, "host started");
+#if PROBE_MODE
+    probe_hello();
+#endif
 }
 
 void PassUsbHost::client_event_cb(const usb_host_client_event_msg_t *msg, void *arg) {
@@ -114,6 +239,10 @@ void PassUsbHost::client_event_cb(const usb_host_client_event_msg_t *msg, void *
 void PassUsbHost::on_new_device(uint8_t address) {
     ESP_LOGI(TAG, "NEW_DEV addr=%u", address);
     R_LOG("NEW_DEV addr=%u", address);
+#if PROBE_MODE
+    probe_reset();
+    R_LOG("[PRB] STATE side=R event=new_device address=%u", (unsigned)address);
+#endif
     device_connected_ = true;
     portENTER_CRITICAL(&flow_lock);
     target_mounted_  = false;
@@ -124,6 +253,10 @@ void PassUsbHost::on_new_device(uint8_t address) {
 
     esp_err_t err = usb_host_device_open(client_handle_, address, &device_handle_);
     R_LOG("device_open err=0x%x", err);
+#if PROBE_MODE
+    R_LOG("[PRB] STATE side=R event=device_open status=%d err=0x%x",
+          err == ESP_OK ? 1 : 0, (unsigned)err);
+#endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "device_open err=0x%x", err);
         return;
@@ -142,11 +275,17 @@ void PassUsbHost::on_new_device(uint8_t address) {
     // pipeline, so an early probe + cache path isn't needed.
     ipc_send(FRAME_DEVICE_READY, 0, 0, nullptr, 0);
     ready_ = true;
+#if PROBE_MODE
+    R_LOG("[PRB] STATE side=R event=device_ready");
+#endif
     diag_on_device_ready();
 }
 
 void PassUsbHost::on_device_gone() {
     ESP_LOGI(TAG, "DEV_GONE");
+#if PROBE_MODE
+    R_LOG("[PRB] STATE side=R event=device_gone");
+#endif
     ready_ = false;
     device_connected_ = false;
     release_all();
@@ -162,7 +301,30 @@ bool PassUsbHost::fetch_and_relay_descriptors() {
           (unsigned)dev_desc->idVendor, (unsigned)dev_desc->idProduct,
           (unsigned)dev_desc->bDeviceClass, (unsigned)dev_desc->bDeviceSubClass,
           (unsigned)dev_desc->bDeviceProtocol, (unsigned)dev_desc->bcdDevice);
+#if PROBE_MODE
+    probe_log_blob("desc", "device", 0, (const uint8_t *)dev_desc, 18);
+#endif
     ipc_send(FRAME_DESC_DEVICE, 0, 0, (const uint8_t *)dev_desc, 18);
+
+    usb_device_info_t dinfo = {};
+    bool dinfo_valid = usb_host_device_info(device_handle_, &dinfo) == ESP_OK;
+#if PROBE_MODE
+    R_LOG("[PRB] DEVICE vid=%04x pid=%04x bcd=%04x usb=%04x speed=%s address=%u ep0=%u config_value=%u configs=%u class=%02x subclass=%02x protocol=%02x mfg_index=%u product_index=%u serial_index=%u",
+          (unsigned)dev_desc->idVendor, (unsigned)dev_desc->idProduct,
+          (unsigned)dev_desc->bcdDevice, (unsigned)dev_desc->bcdUSB,
+          dinfo_valid ? probe_speed_name(dinfo.speed) : "unknown",
+          dinfo_valid ? (unsigned)dinfo.dev_addr : 0,
+          dinfo_valid ? (unsigned)dinfo.bMaxPacketSize0
+                      : (unsigned)dev_desc->bMaxPacketSize0,
+          dinfo_valid ? (unsigned)dinfo.bConfigurationValue : 0,
+          (unsigned)dev_desc->bNumConfigurations,
+          (unsigned)dev_desc->bDeviceClass,
+          (unsigned)dev_desc->bDeviceSubClass,
+          (unsigned)dev_desc->bDeviceProtocol,
+          (unsigned)dev_desc->iManufacturer,
+          (unsigned)dev_desc->iProduct,
+          (unsigned)dev_desc->iSerialNumber);
+#endif
 
     const usb_config_desc_t *cfg_desc = nullptr;
     e = usb_host_get_active_config_descriptor(device_handle_, &cfg_desc);
@@ -170,6 +332,17 @@ bool PassUsbHost::fetch_and_relay_descriptors() {
     if (e != ESP_OK) return false;
     R_LOG("cfg wTotal=%u nIf=%u",
           (unsigned)cfg_desc->wTotalLength, (unsigned)cfg_desc->bNumInterfaces);
+#if PROBE_MODE
+    probe_log_blob("desc", "config", 0, (const uint8_t *)cfg_desc,
+                   cfg_desc->wTotalLength);
+    R_LOG("[PRB] CONFIG value=%u total=%u interfaces=%u attributes=%02x max_power=%u string_index=%u",
+          (unsigned)cfg_desc->bConfigurationValue,
+          (unsigned)cfg_desc->wTotalLength,
+          (unsigned)cfg_desc->bNumInterfaces,
+          (unsigned)cfg_desc->bmAttributes,
+          (unsigned)cfg_desc->bMaxPower,
+          (unsigned)cfg_desc->iConfiguration);
+#endif
     ipc_send(FRAME_DESC_CONFIG, 0, 0, (const uint8_t *)cfg_desc, cfg_desc->wTotalLength);
 
     // Ship every referenced string descriptor: device manufacturer /
@@ -188,18 +361,44 @@ bool PassUsbHost::fetch_and_relay_descriptors() {
 
     const uint8_t *p   = (const uint8_t *)cfg_desc;
     const uint8_t *end = p + cfg_desc->wTotalLength;
+    uint8_t probe_if = 0xff;
+    uint8_t probe_alt = 0xff;
     while (p + 2 <= end) {
         uint8_t blen = p[0], btyp = p[1];
         if (!blen) break;
         if (btyp == USB_B_DESCRIPTOR_TYPE_INTERFACE && blen >= 9) {
             const usb_intf_desc_t *ifd = (const usb_intf_desc_t *)p;
             push_idx(ifd->iInterface);
+            probe_if = ifd->bInterfaceNumber;
+            probe_alt = ifd->bAlternateSetting;
+#if PROBE_MODE
+            R_LOG("[PRB] IF number=%u alt=%u endpoints=%u class=%02x subclass=%02x protocol=%02x string_index=%u",
+                  (unsigned)ifd->bInterfaceNumber,
+                  (unsigned)ifd->bAlternateSetting,
+                  (unsigned)ifd->bNumEndpoints,
+                  (unsigned)ifd->bInterfaceClass,
+                  (unsigned)ifd->bInterfaceSubClass,
+                  (unsigned)ifd->bInterfaceProtocol,
+                  (unsigned)ifd->iInterface);
+#endif
+        } else if (btyp == USB_B_DESCRIPTOR_TYPE_ENDPOINT && blen >= 7) {
+            const usb_ep_desc_t *ed = (const usb_ep_desc_t *)p;
+#if PROBE_MODE
+            R_LOG("[PRB] EP interface=%u alt=%u address=%02x direction=%s attributes=%02x type=%s mps=%u interval=%u",
+                  (unsigned)probe_if, (unsigned)probe_alt,
+                  (unsigned)ed->bEndpointAddress,
+                  (ed->bEndpointAddress & USB_B_ENDPOINT_ADDRESS_EP_DIR_MASK)
+                      ? "in" : "out",
+                  (unsigned)ed->bmAttributes,
+                  probe_ep_type_name(ed->bmAttributes),
+                  (unsigned)ed->wMaxPacketSize,
+                  (unsigned)ed->bInterval);
+#endif
         }
         p += blen;
     }
 
-    usb_device_info_t dinfo;
-    if (usb_host_device_info(device_handle_, &dinfo) == ESP_OK) {
+    if (dinfo_valid) {
         auto ship_one = [&](uint8_t idx, const usb_str_desc_t *sd) {
             if (!sd || !idx) return;
             uint8_t body_len = (sd->bLength > 2) ? (sd->bLength - 2) : 0;
@@ -210,6 +409,10 @@ bool PassUsbHost::fetch_and_relay_descriptors() {
             // descriptor starting at bLength. Skip the 2-byte header so
             // we ship only the UTF-16LE body — what Left expects.
             memcpy(&buf[1], sd->val + 2, body_len);
+#if PROBE_MODE
+            probe_log_blob("desc", "string", idx,
+                           (const uint8_t *)sd, sd->bLength);
+#endif
             ipc_send(FRAME_DESC_STRING, 0, 0, buf, 1 + body_len);
         };
         ship_one(dev_desc->iManufacturer, dinfo.str_desc_manufacturer);
@@ -316,7 +519,16 @@ void PassUsbHost::set_target_mounted(bool mounted) {
         bool sent = ipc_send(FRAME_EP_IN, replay_ep, 0, replay_buf, replay_len);
         R_LOG("[EP] GIP ANNOUNCE_REPLAY ep=%02x len=%u sent=%u",
               (unsigned)replay_ep, (unsigned)replay_len, (unsigned)sent);
+#if PROBE_MODE
+        R_LOG("[PRB] STATE side=R event=announce_replay ep=%02x len=%u sent=%u",
+              (unsigned)replay_ep, (unsigned)replay_len, (unsigned)sent);
+#endif
     }
+#if PROBE_MODE
+    R_LOG("[PRB] STATE side=R event=%s announce_cached=%u announce_ep=%02x announce_len=%u",
+          mounted ? "target_mounted" : "target_reset", (unsigned)cached,
+          (unsigned)replay_ep, (unsigned)replay_len);
+#endif
 }
 
 void PassUsbHost::in_xfer_complete(usb_transfer_t *t) {
@@ -344,6 +556,9 @@ void PassUsbHost::in_xfer_complete(usb_transfer_t *t) {
         uint8_t b0 = t->data_buffer[0];
         bool cached_now = false;
         bool forward_now = false;
+#if PROBE_MODE
+        bool probe_log_now = false;
+#endif
         uint16_t cached_len = 0;
         portENTER_CRITICAL(&flow_lock);
         if (b0 == 0x02 && !self->announce_cached_) {
@@ -359,20 +574,47 @@ void PassUsbHost::in_xfer_complete(usb_transfer_t *t) {
         forward_now = self->target_mounted_;
         portEXIT_CRITICAL(&flow_lock);
 
+#if PROBE_MODE
+        probe_log_now = self->probe_should_log_in(
+            t->bEndpointAddress, t->data_buffer,
+            (uint16_t)t->actual_num_bytes, forward_now);
+#endif
         if (cached_now) {
             R_LOG("[EP] GIP ANNOUNCE_CACHED ep=%02x len=%u",
                   (unsigned)t->bEndpointAddress,
                   (unsigned)cached_len);
+#if PROBE_MODE
+            R_LOG("[PRB] STATE side=R event=announce_cached ep=%02x len=%u",
+                  (unsigned)t->bEndpointAddress, (unsigned)cached_len);
+#endif
         }
         if (forward_now) {
             ipc_send(FRAME_EP_IN, t->bEndpointAddress, 0,
                      t->data_buffer, (uint16_t)t->actual_num_bytes);
         }
+#if PROBE_MODE
+        if (probe_log_now) {
+            self->probe_log_packet("in", forward_now ? "postmount" : "premount",
+                                   t->bEndpointAddress, (int)t->status,
+                                   t->data_buffer,
+                                   (uint16_t)t->actual_num_bytes);
+        }
+#endif
     }
     usb_host_transfer_submit(t);
 }
 
 void PassUsbHost::out_xfer_complete(usb_transfer_t *t) {
+#if PROBE_MODE
+    auto *self = static_cast<PassUsbHost *>(t->context);
+    uint16_t result_index = __atomic_fetch_add(&self->probe_out_results_, 1,
+                                                __ATOMIC_RELAXED);
+    if (result_index < 128) {
+        R_LOG("[PRB] OUT_RESULT side=R ep=%02x status=%d requested=%u actual=%u",
+              (unsigned)t->bEndpointAddress, (int)t->status,
+              (unsigned)t->num_bytes, (unsigned)t->actual_num_bytes);
+    }
+#endif
     usb_host_transfer_free(t);
 }
 
@@ -393,6 +635,17 @@ void PassUsbHost::control_xfer_complete(usb_transfer_t *t) {
                        : XFER_ERROR;
         ipc_send(FRAME_CTRL_STATUS, 0, seq, &status, 1);
     }
+#if PROBE_MODE
+    // Forward the real completion first; only then serialize diagnostic data.
+    uint16_t probe_data_len = t->actual_num_bytes > 8
+                            ? (uint16_t)(t->actual_num_bytes - 8) : 0;
+    R_LOG("[PRB] CTRL side=R phase=complete seq=%u status=%d data_len=%u",
+          (unsigned)seq, (int)t->status, (unsigned)probe_data_len);
+    if (probe_data_len > 0) {
+        probe_log_blob("control", "in", seq, t->data_buffer + 8,
+                       probe_data_len);
+    }
+#endif
     usb_host_transfer_free(t);
 }
 
@@ -410,6 +663,14 @@ bool PassUsbHost::submit_out(uint8_t ep_addr, const uint8_t *data, uint16_t len)
         usb_host_transfer_free(t);
         return false;
     }
+#if PROBE_MODE
+    // The physical URB is already queued; trace formatting cannot delay it.
+    uint16_t sample_index = __atomic_fetch_add(&probe_out_samples_, 1,
+                                               __ATOMIC_RELAXED);
+    if (sample_index < 128) {
+        probe_log_packet("out", "submit", ep_addr, 0, data, len);
+    }
+#endif
     return true;
 }
 
@@ -464,6 +725,19 @@ bool PassUsbHost::submit_control(const uint8_t setup[8], const uint8_t *data_out
         ipc_send(FRAME_CTRL_STATUS, 0, seq, &s, 1);
         return false;
     }
+#if PROBE_MODE
+    // Submit first so diagnostic serialization cannot hold off the real
+    // device's control transfer.
+    const uint16_t wValue = (uint16_t)setup[2] | ((uint16_t)setup[3] << 8);
+    const uint16_t wIndex = (uint16_t)setup[4] | ((uint16_t)setup[5] << 8);
+    R_LOG("[PRB] CTRL side=R phase=submit seq=%u direction=%s bm=%02x request=%02x value=%04x index=%04x requested=%u out_len=%u",
+          (unsigned)seq, is_in ? "in" : "out", (unsigned)setup[0],
+          (unsigned)setup[1], (unsigned)wValue, (unsigned)wIndex,
+          (unsigned)wLength, (unsigned)len);
+    if (!is_in && data_out && len > 0) {
+        probe_log_blob("control", "out", seq, data_out, len);
+    }
+#endif
     return true;
 }
 
@@ -471,6 +745,9 @@ void PassUsbHost::release_all() {
     // Mark disconnected FIRST so any in-flight IN completions that fire
     // while we're tearing down bail out of the re-submit path cleanly.
     device_connected_ = false;
+#if PROBE_MODE
+    R_LOG("[PRB] STATE side=R event=release_all");
+#endif
     portENTER_CRITICAL(&flow_lock);
     target_mounted_  = false;
     announce_cached_ = false;

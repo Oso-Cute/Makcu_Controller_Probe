@@ -14,6 +14,10 @@
 #define PASS_MAX_ENDPOINTS   8
 #define PASS_MAX_INTERFACES  4
 
+#ifndef PROBE_MODE
+#define PROBE_MODE 0
+#endif
+
 class PassUsbHost {
 public:
     void begin();
@@ -32,6 +36,11 @@ public:
     // or reset. Real-device IN traffic is held until mounted; a cached GIP
     // announce is replayed on each mount so the target owns the handshake.
     void set_target_mounted(bool mounted);
+
+    // Emit a parseable build banner in response to km.probe(). This method is
+    // always present so mixed diagnostic builds fail clearly instead of
+    // silently ignoring the PC collector's handshake.
+    void probe_hello() const;
 
     bool is_ready() const { return ready_; }
 
@@ -74,6 +83,27 @@ private:
     uint8_t  announce_ep_ = 0x82;
     uint16_t announce_len_ = 0;
     uint8_t  announce_buf_[64] = {0};
+
+#if PROBE_MODE
+    // Controller-probe packet sampler. Pre-mount traffic is captured up to a
+    // small bound; post-mount traffic is change-only so a 1 kHz controller
+    // cannot flood IPC/UART and perturb the handshake being measured.
+    uint32_t probe_packet_id_ = 0;
+    uint16_t probe_packet_samples_ = 0;
+    uint8_t  probe_premount_samples_ = 0;
+    uint16_t probe_out_samples_ = 0;
+    uint16_t probe_out_results_ = 0;
+    bool     probe_last_valid_[16] = {false};
+    uint8_t  probe_last_len_[16] = {0};
+    uint8_t  probe_last_data_[16][64] = {{0}};
+
+    void probe_reset();
+    bool probe_should_log_in(uint8_t ep_addr, const uint8_t *data,
+                             uint16_t len, bool mounted);
+    void probe_log_packet(const char *direction, const char *phase,
+                          uint8_t ep_addr, int status,
+                          const uint8_t *data, uint16_t len);
+#endif
 
     void release_all();
 };

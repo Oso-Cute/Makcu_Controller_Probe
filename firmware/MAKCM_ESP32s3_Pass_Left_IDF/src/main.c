@@ -39,6 +39,41 @@ extern int km_uart_write(const void *data, size_t len);
 static const char *TAG = "PassLeft";
 #define DIAG_LED_PIN   GPIO_NUM_48
 
+#ifndef PROBE_MODE
+#define PROBE_MODE 0
+#endif
+
+#if PROBE_MODE
+#define PROBE_HEX_CHUNK 32
+static void probe_log_blob_uart(const char *record, const char *kind,
+                                uint32_t id, const uint8_t *data,
+                                uint16_t len) {
+    if (!data || len == 0) {
+        char empty[144];
+        int n = snprintf(empty, sizeof(empty),
+            "[L][PRB] BLOB record=%s kind=%s id=%lu off=0 total=0 hex=-\n",
+            record, kind, (unsigned long)id);
+        if (n > 0) km_uart_write(empty, (size_t)n);
+        return;
+    }
+    for (uint16_t off = 0; off < len; off += PROBE_HEX_CHUNK) {
+        uint16_t take = (uint16_t)(len - off);
+        if (take > PROBE_HEX_CHUNK) take = PROBE_HEX_CHUNK;
+        char hex[PROBE_HEX_CHUNK * 2 + 1];
+        for (uint16_t i = 0; i < take; ++i) {
+            snprintf(hex + i * 2, sizeof(hex) - i * 2, "%02x", data[off + i]);
+        }
+        hex[take * 2] = 0;
+        char line[220];
+        int n = snprintf(line, sizeof(line),
+            "[L][PRB] BLOB record=%s kind=%s id=%lu off=%u total=%u hex=%s\n",
+            record, kind, (unsigned long)id, (unsigned)off,
+            (unsigned)len, hex);
+        if (n > 0) km_uart_write(line, (size_t)n);
+    }
+}
+#endif
+
 // Descriptor cache — populated by IPC from Right BEFORE USB enumeration.
 // esp_tinyusb's tinyusb_config_t holds pointers to these at install time.
 static tusb_desc_device_t desc_device;
@@ -100,6 +135,14 @@ static char  str_storage[10][130];
 static bool xbox_probe_target(void) {
     return desc_device_valid && desc_config_valid &&
            desc_device.idVendor == 0x045e && desc_device.idProduct == 0x0b12;
+}
+
+// Probe builds query descriptor quirks on every attached device for evidence,
+// but the production mirroring callbacks below remain VID/PID-gated. This
+// records what a new controller does without silently changing Xbox behavior.
+static bool descriptor_probe_target(void) {
+    return xbox_probe_target() ||
+           (PROBE_MODE && desc_device_valid && desc_config_valid);
 }
 
 uint8_t const *tud_descriptor_device_qualifier_cb(void) {
@@ -205,6 +248,9 @@ static void log_descriptor_probe_data(const char *name, uint16_t seq,
     if (len > show && n < (int)sizeof(m) - 4) n += snprintf(m + n, sizeof(m) - n, "...");
     if (n < (int)sizeof(m) - 1) m[n++] = '\n';
     km_uart_write(m, n);
+#if PROBE_MODE
+    probe_log_blob_uart("probe_descriptor", name, seq, payload, len);
+#endif
 }
 
 static void build_string_array(uint8_t *count_out) {
@@ -307,6 +353,9 @@ void ipc_handle_frame(uint8_t type, uint8_t ep_addr, uint16_t seq,
         if (len == 18) {
             memcpy(&desc_device, payload, 18);
             desc_device_valid = true;
+#if PROBE_MODE
+            probe_log_blob_uart("relay_descriptor", "device", 0, payload, len);
+#endif
             poke_main = true;
         }
         break;
@@ -317,6 +366,10 @@ void ipc_handle_frame(uint8_t type, uint8_t ep_addr, uint16_t seq,
                 memcpy(desc_config, payload, len);
                 desc_config_len   = len;
                 desc_config_valid = true;
+#if PROBE_MODE
+                probe_log_blob_uart("relay_descriptor", "config", 0,
+                                    payload, len);
+#endif
                 poke_main = true;
             }
         }
@@ -332,6 +385,10 @@ void ipc_handle_frame(uint8_t type, uint8_t ep_addr, uint16_t seq,
             strings[strings_count].byte_len = stored;
             memcpy(strings[strings_count].utf16, payload + 1, stored);
             strings_count++;
+#if PROBE_MODE
+            probe_log_blob_uart("relay_descriptor", "string", idx,
+                                payload + 1, raw);
+#endif
         }
         break;
     case FRAME_DEVICE_READY:
@@ -342,17 +399,35 @@ void ipc_handle_frame(uint8_t type, uint8_t ep_addr, uint16_t seq,
         desc_ms_os_string_valid = false;
         desc_ms_os_string_len   = 0;
         desc_probe_started     = false;
-        if (xbox_probe_target()) {
+        if (descriptor_probe_target()) {
             desc_probe_started = send_descriptor_probe(
                 DESC_PROBE_MS_OS_SEQ, TUSB_DESC_STRING, 0xee, 0,
-                18);
+                PROBE_MODE ? 255 : 18);
         }
+#if PROBE_MODE
+        {
+            char m[160];
+            int n = snprintf(m, sizeof(m),
+                "[L][PRB] STATE side=L event=device_ready vid=%04x pid=%04x descriptor_probe=%u\n",
+                (unsigned)desc_device.idVendor,
+                (unsigned)desc_device.idProduct,
+                (unsigned)desc_probe_started);
+            if (n > 0) km_uart_write(m, (size_t)n);
+        }
+#endif
         poke_main = true;
         break;
     case FRAME_DEVICE_GONE:
         // Hand teardown off to main_task so install/uninstall/disconnect
         // always run from the same thread that called start_usb.
         teardown_pending = true;
+#if PROBE_MODE
+        {
+            static const char probe_gone[] =
+                "[L][PRB] STATE side=L event=device_gone\n";
+            km_uart_write(probe_gone, sizeof(probe_gone) - 1);
+        }
+#endif
         poke_main = true;
         break;
     case FRAME_EP_IN:
@@ -402,6 +477,18 @@ void ipc_handle_frame(uint8_t type, uint8_t ep_addr, uint16_t seq,
                 (unsigned)desc_qualifier_valid,
                 (unsigned)desc_other_speed_valid);
             if (n > 0) km_uart_write(m, n);
+#if PROBE_MODE
+            {
+                char pm[176];
+                int pn = snprintf(pm, sizeof(pm),
+                    "[L][PRB] PROBE_STATUS seq=%u status=%u ms_os_valid=%u qualifier_valid=%u other_speed_valid=%u\n",
+                    (unsigned)seq, (unsigned)status,
+                    (unsigned)desc_ms_os_string_valid,
+                    (unsigned)desc_qualifier_valid,
+                    (unsigned)desc_other_speed_valid);
+                if (pn > 0) km_uart_write(pm, (size_t)pn);
+            }
+#endif
             if (seq == DESC_PROBE_MS_OS_SEQ) {
                 send_descriptor_probe(DESC_PROBE_QUAL_SEQ,
                                       TUSB_DESC_DEVICE_QUALIFIER,

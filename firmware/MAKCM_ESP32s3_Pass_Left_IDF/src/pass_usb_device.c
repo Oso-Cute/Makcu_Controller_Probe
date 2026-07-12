@@ -63,6 +63,10 @@ static void lat_reset(void) {
 
 static const char *TAG = "pass_cd";
 
+#ifndef PROBE_MODE
+#define PROBE_MODE 0
+#endif
+
 extern uint8_t  desc_config[];
 extern uint16_t desc_config_len;
 extern bool ipc_send(uint8_t type, uint8_t ep_addr, uint16_t seq,
@@ -150,6 +154,14 @@ static void notify_target_state(uint8_t frame_type, const char *state) {
     int n = snprintf(msg, sizeof(msg),
                      "[L][EP] TARGET_%s sent=%u\n", state, (unsigned)sent);
     if (n > 0) km_uart_write(msg, (size_t)n);
+#if PROBE_MODE
+    char probe[144];
+    int pn = snprintf(probe, sizeof(probe),
+        "[L][PRB] STATE side=L event=target_%s sent=%u\n",
+        frame_type == FRAME_TARGET_MOUNTED ? "mounted" : "reset",
+        (unsigned)sent);
+    if (pn > 0) km_uart_write(probe, (size_t)pn);
+#endif
 }
 
 void tud_mount_cb(void) {

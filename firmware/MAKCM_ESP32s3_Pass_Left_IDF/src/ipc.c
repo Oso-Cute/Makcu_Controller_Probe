@@ -4,6 +4,7 @@
 //        to the second PC's COM3 @ 4 Mbaud.
 
 #include <string.h>
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -27,6 +28,11 @@
 extern void ipc_handle_frame(uint8_t type, uint8_t ep_addr, uint16_t seq,
                              const uint8_t *payload, uint16_t len);
 extern void km_ingest_raw(const uint8_t *payload, uint16_t len);
+int km_uart_write(const void *data, size_t len);
+
+#ifndef PROBE_MODE
+#define PROBE_MODE 0
+#endif
 
 static const char *TAG = "ipc";
 static SemaphoreHandle_t ipc_tx_mutex;
@@ -113,6 +119,16 @@ static void ipc_feed(uint8_t b) {
                          (unsigned long)count, rx_type, (unsigned)rx_len,
                          (unsigned)rx_seq, (unsigned)crc,
                          (unsigned)rx_crc_rcvd, (long long)good_age_ms);
+#if PROBE_MODE
+                char probe[208];
+                int pn = snprintf(probe, sizeof(probe),
+                    "[L][PRB] ERROR side=L type=ipc_crc count=%lu frame_type=%02x len=%u seq=%u expected=%04x received=%04x last_good_age_ms=%lld\n",
+                    (unsigned long)count, (unsigned)rx_type,
+                    (unsigned)rx_len, (unsigned)rx_seq,
+                    (unsigned)crc, (unsigned)rx_crc_rcvd,
+                    (long long)good_age_ms);
+                if (pn > 0) km_uart_write(probe, (size_t)pn);
+#endif
             }
         }
         rx_state = S_WAIT_MAGIC0;

@@ -7,3 +7,9 @@ _FO_Docs/
 **/managed_components/
 *.pyc
 __pycache__/
+
+# Reproducible Controller Probe release/report output
+dist/
+Controller_Probe_Reports/
+tools/controller_probe/Controller_Probe_Reports/
+**/sdkconfig.*_PROBE

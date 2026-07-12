@@ -37,9 +37,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
+#include "pass_ipc.h"
 
 extern int km_uart_write(const void *data, size_t len);
 extern int km_uart_write_raw(const void *data, size_t len);  // never gated by COM3_LOG
+extern bool ipc_send(uint8_t type, uint8_t ep_addr, uint16_t seq,
+                     const uint8_t *payload, uint16_t len);
+
+#ifndef PROBE_MODE
+#define PROBE_MODE 0
+#endif
+#define PROBE_SCHEMA_VERSION 1
+#define PROBE_LEFT_BUILD_ID "makcu-left-probe-1"
 
 // Idle-time cleanup of stale synth template cache, called from
 // km_housekeep_cb after KM_IDLE_HOUSEKEEP_MS of no km activity. Defined
@@ -549,6 +558,26 @@ static void parse_km_text(const char *line, uint16_t len) {
         static const char kResp[] =
             "kmbox:   1.0.0 " __DATE__ " " __TIME__ "\r\n>>> ";
         km_uart_write_raw(kResp, sizeof(kResp) - 1);
+        return;
+    }
+
+    // Controller Probe handshake. The local banner bypasses COM3_LOG so the
+    // collector can distinguish a normal gameplay image from LEFT_PROBE.
+    // A tiny IPC command asks Right to emit its matching banner as well.
+    if (str_starts(buf, n, "km.probe(")) {
+        char response[144];
+        int rn = snprintf(response, sizeof(response),
+            "[PRB] HELLO schema=%u side=L build=%s probe=%u ipc_baud=%lu\r\n",
+            (unsigned)PROBE_SCHEMA_VERSION, PROBE_LEFT_BUILD_ID,
+            (unsigned)PROBE_MODE, (unsigned long)PASS_IPC_UART_BAUD);
+        if (rn > 0) km_uart_write_raw(response, (size_t)rn);
+        const uint8_t command = PROBE_CMD_HELLO;
+        bool sent = ipc_send(FRAME_PROBE_COMMAND, 0, 0, &command, 1);
+        if (!sent) {
+            static const char fail[] =
+                "[PRB] ERROR side=L type=probe_hello_ipc_send_failed\r\n";
+            km_uart_write_raw(fail, sizeof(fail) - 1);
+        }
         return;
     }
 

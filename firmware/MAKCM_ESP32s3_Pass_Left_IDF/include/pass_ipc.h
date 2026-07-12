@@ -47,6 +47,7 @@ enum pass_ipc_type {
     FRAME_EP_OUT         = 0x12,  // OUT endpoint data
     FRAME_TARGET_MOUNTED = 0x13,  // Xbox/PC configured Left; Right may forward IN
     FRAME_TARGET_RESET   = 0x14,  // Xbox/PC reset/unmounted Left; pause IN forwarding
+    FRAME_PROBE_COMMAND  = 0x15,  // [u8 command] diagnostic probe control
 
     // Right → Left:
     FRAME_CTRL_IN_DATA   = 0x20,  // IN control data (seq matches SETUP)
@@ -59,6 +60,10 @@ enum pass_ipc_type {
 
     FRAME_LOG            = 0xF0,  // ASCII log line (Right → Left, tunneled to COM3)
     FRAME_PING           = 0xF1,  // empty payload; responder echoes same seq
+};
+
+enum pass_ipc_probe_command {
+    PROBE_CMD_HELLO = 0x01,       // Ask Right to emit its structured build banner
 };
 
 enum pass_ipc_xfer_status {

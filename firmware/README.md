@@ -110,6 +110,22 @@ gated to `045E:0B12`.
 Left and Right are a matched protocol pair. Never flash only one of these over
 an older build, and never mix a 2 Mbps side with a 5 Mbps side.
 
+## Probe builds for new controllers
+
+The source projects also provide `LEFT_PROBE` and `RIGHT_PROBE` environments.
+They add bounded structured diagnostics for controller compatibility reports;
+they do not replace the validated merged pair above.
+
+From the repository root:
+
+```powershell
+pio run -d firmware/MAKCM_ESP32s3_Pass_Left_IDF -e LEFT_PROBE
+pio run -d firmware/MAKCM_ESP32s3_Pass_Right -e RIGHT_PROBE
+```
+
+See `tools/controller_probe/README.md` for the guided collector, report privacy
+rules, parser tests, and shareable-package builder.
+
 ## Integrity
 
 Verify the images before sharing or flashing:
