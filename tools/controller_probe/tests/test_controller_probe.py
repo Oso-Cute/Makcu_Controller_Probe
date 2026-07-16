@@ -76,15 +76,18 @@ class ProbeParserTests(unittest.TestCase):
         self.assertIn("[REDACTED IN REPORT]", report)
         self.assertIn("GIP announce, host OUT traffic", report)
 
-    def test_output_writes_oso_bundle(self):
+    def test_output_writes_only_the_oso_zip(self):
         profile = self.parse()
         with tempfile.TemporaryDirectory() as td:
             outputs = write_outputs(sample_lines(), profile, Path(td), "session")
             self.assertTrue(outputs["oso_zip"].is_file())
+            self.assertEqual(list(outputs["session"].iterdir()),
+                             [outputs["oso_zip"]])
             with zipfile.ZipFile(outputs["oso_zip"]) as zf:
                 names = set(zf.namelist())
                 self.assertIn("raw_serial.log", names)
                 self.assertIn("controller_profile_full.json", names)
+                self.assertIn("REPORT.md", names)
 
     def test_missing_mount_is_reported_as_enumeration_failure(self):
         parser = ProbeParser()

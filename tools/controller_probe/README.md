@@ -54,10 +54,14 @@ controller serial or authentication traffic, so do not post it publicly.
      The tool records the controller being unplugged and then reconnected to
      USB3.
 
+   In both tests, if the controller does not light up within a few seconds of
+   being connected, press its power (Xbox/home) button once.
+
    Use an Xbox for an Xbox/GIP handshake diagnosis. A PC produces a useful
    comparison capture but cannot prove the Xbox handshake.
 6. Perform each requested stick/button action.
-7. Find the finished ZIP under `Controller_Probe_Reports`.
+7. Find the finished ZIP under `Controller_Probe_Reports` — the session
+   folder contains only the ZIP.
 8. Send the `SEND_TO_OSO_CUTE_...zip` file privately to oso_cute.
 9. Restore normal gameplay firmware after the capture if desired.
 
