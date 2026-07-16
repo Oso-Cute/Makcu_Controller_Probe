@@ -963,6 +963,8 @@ def run_live(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
 
         # ---- Phase 1: cold start (retryable) --------------------------------
         while True:
+            input("Ready to connect USB1 and press the power button? "
+                  "Press Enter...")
             phase_start = len(capture.snapshot_stamped())
             capture.mark("PHASE_1_COLD_START usb1_connect_now")
             connection_countdown(
@@ -996,7 +998,8 @@ def run_live(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
                 print_setup("PHASE 2 — CONTROLLER REPLUG", [
                     "Keep USB1 and USB2 connected.",
                     "Unplug the controller from USB3; the countdown tells you",
-                    "when to reconnect it. Recording never stops.",
+                    "when to reconnect it. Don't forget to hit the power",
+                    "button once after reconnecting. Recording never stops.",
                 ])
                 input("Unplug the controller from USB3, then press Enter...")
                 phase_start = len(capture.snapshot_stamped())
@@ -1107,8 +1110,9 @@ def main(argv: list[str] | None = None) -> int:
     print("DONE")
     print(profile["analysis"]["verdict"])
     print(f"Please send this ZIP to oso_cute:\n{outputs['oso_zip']}")
-    print("Opening the folder...")
     print("=" * 72)
+    time.sleep(2)
+    print("Opening the folder with the ZIP to share...")
     try:
         os.startfile(str(outputs["session"]))  # type: ignore[attr-defined]
     except (AttributeError, OSError):

@@ -1,112 +1,58 @@
-# MAKCU/MAKCM Xbox Passthrough + Accessibility
+# MAKCU Controller Probe
 
-This is the working dual-ESP32-S3 MAKCM package validated on Xbox Series X on
-July 12, 2026.
+This was 100% done with the help of Claude.
 
-The board passes a physical XIM/controller through to Xbox and exposes an
-accessibility command channel through the middle CH343 USB port. The validated
-firmware fixed Xbox enumeration, stale control recovery, and GIP startup
-ordering. Physical controller movement and injected A-button inputs were both
-confirmed through the complete path.
+💬 **Community:** [Join The S&Box Discord](https://discord.gg/hPFZbJwY2Z) — come share what you're building with Titan2 and makcu/controller.
+
+☕ **Support:** [Buy me a coffee](https://buymeacoffee.com/OsoCute) — if this project helped you out.
+
+## Demo video
+
+*Coming soon.*
+
+<!--
+[![MAKCU Controller Probe — demo](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://youtu.be/VIDEO_ID)
+-->
+
+## What it does
+
+A guided capture tool for the dual-ESP32-S3 MAKCU/MAKCM passthrough board. It
+records a controller's USB descriptors, host enumeration, handshake packets,
+and input reports into a single ZIP — the evidence a developer needs to add
+support for a controller they don't physically own.
+
+It does **not** make an unsupported controller work by itself. It removes the
+guesswork from the firmware change that will.
+
+## Quick start
+
+1. Back up your current Left/Right firmware.
+2. Flash both probe images: `tools\controller_probe\Flash_Probe_Firmware.bat`
+   (manual esptool steps in `tools/controller_probe/MANUAL_FLASH.md`).
+3. Disconnect all cables for ten seconds.
+4. Run `tools\controller_probe\Run_Controller_Probe.bat` and follow the
+   prompts.
+5. Send the `SEND_TO_OSO_CUTE_...zip` from `Controller_Probe_Reports`
+   privately to oso_cute — it can contain controller serial/auth traffic, so
+   don't post it publicly.
+
+Full walkthrough: [`tools/controller_probe/README.md`](tools/controller_probe/README.md)
 
 ## Layout
 
 ```text
-macku_controller/
-├── README.md
-├── FLASHING.md
-├── accessibility/
-│   ├── launch_makcu_gui.bat
-│   ├── makcu_access.py
-│   ├── makcu_gui.py
-│   ├── makcu_monitor.py
-│   ├── config.json
-│   └── README.md
-├── firmware/
-│   ├── Flash_MAKCM.bat
-│   ├── flash_tool.py
-│   ├── Left/MERGED_left.bin
-│   ├── Right/MERGED_right.bin
-│   ├── SHA256SUMS.txt
-│   └── README.md
-└── _FO_Docs/
+tools/controller_probe/   Guided probe tool, flasher, and docs
+firmware/                 Left/Right passthrough firmware sources + flash tool
+firmware/rawbins/         Prebuilt merged probe images
+accessibility/            Accessibility command GUI for the CH343 port
+FLASHING.md               Detailed flashing instructions
 ```
 
-The firmware source projects remain under `firmware/` for reference, but they
-are not required when using the merged images and guided flasher.
+## Related
 
-## Quick start
+- [makcu-controller-fw](https://github.com/Oso-Cute/makcu-controller-fw) —
+  the community-fixed MAKCM passthrough firmware this probe supports.
 
-### Flash both MCUs
+## License
 
-Run:
-
-```text
-firmware\Flash_MAKCM.bat
-```
-
-Follow the wizard. The two images are a matched 2 Mbps protocol pair; both
-sides must be flashed.
-
-### Reconnect normally
-
-After flashing:
-
-1. Disconnect all three USB connections for about ten seconds.
-2. Connect USB3 to the XIM/controller.
-3. Connect USB2/middle to the PC.
-4. Connect USB1/Left to Xbox last.
-
-### Test accessibility
-
-Run:
-
-```text
-accessibility\launch_makcu_gui.bat
-```
-
-The local configuration currently uses COM5. If Windows changes the CH343 COM
-number, select the detected CH343 port in the GUI or edit
-`accessibility/config.json`.
-
-Available assistance includes:
-
-- latch/toggle for A, B, X, Y, LB, RB, LT, and RT;
-- right-stick delta movement;
-- right-stick tremor smoothing and deadzone;
-- drift trim;
-- physical-controller telemetry;
-- explicit **Release all** safety control.
-
-## Validated result
-
-- Xbox enumerated the mirrored `045E:0B12` controller.
-- Microsoft OS `0xEE` and vendor-control traffic completed.
-- Xbox sent real EP2 OUT handshake/authentication packets.
-- IPC CRC failures in the final validation capture: zero.
-- Physical controller movement worked.
-- `km.version()` responded on COM5.
-- Nine commanded A-button taps were transmitted with explicit releases.
-
-## Compatibility
-
-The binaries are not tied to the tested controller's serial number. They read
-physical descriptors at runtime. They are currently validated only for the
-MAKCM board and a downstream device presenting `VID_045E/PID_0B12` with GIP
-behavior. Other hardware or controller identities are experimental.
-
-## Controller compatibility probe
-
-For new controllers such as the GameSir G7 Pro, use the separate probe
-workflow under `tools/controller_probe/`. It builds dedicated `LEFT_PROBE` and
-`RIGHT_PROBE` images and creates a private developer ZIP plus a public-redacted
-ZIP. The normal tested firmware environments remain unchanged.
-
-Start with:
-
-```text
-tools\controller_probe\README.md
-```
-
-See `firmware/README.md` for image checksums and `FLASHING.md` for detailed
-flashing instructions.
+See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
