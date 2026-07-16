@@ -726,8 +726,9 @@ static inline void write_le16(uint8_t *p, int16_t v) {
 #define GIP_BTN_B      0x0020
 #define GIP_BTN_X      0x0040
 #define GIP_BTN_Y      0x0080
-#define GIP_BTN_LB     0x0100
-#define GIP_BTN_RB     0x0200
+// Bits 8-11 are the D-pad (up/down/left/right); bumpers sit at bits 12-13.
+#define GIP_BTN_LB     0x1000
+#define GIP_BTN_RB     0x2000
 
 static uint16_t map_btn_gip(uint16_t generic) {
     uint16_t r = 0;
