@@ -50,6 +50,8 @@ void ipc_handle_frame(uint8_t type, uint8_t ep_addr, uint16_t seq,
     case FRAME_PROBE_COMMAND:
         if (len >= 1 && payload[0] == PROBE_CMD_HELLO) {
             pass_host.probe_hello();
+        } else if (len >= 1 && payload[0] == PROBE_CMD_G7_KICKSTART) {
+            pass_host.probe_g7_kickstart();
         }
         break;
     case FRAME_PING:

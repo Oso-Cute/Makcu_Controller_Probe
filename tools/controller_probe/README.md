@@ -1,23 +1,32 @@
 # MAKCU Controller Probe
 
-The Controller Probe records the USB identity, descriptors, endpoints, Xbox
+The Controller Probe records the USB identity, descriptors, endpoints, host
 enumeration, handshake packets, and controller input reports needed to add or
 diagnose controller support.
 
 It does **not** automatically make an unsupported controller work. It produces
 the evidence needed to make the correct firmware change without guessing.
 
+## Why this exists
+
+The primary goal is to create a private, reproducible evidence package that a
+developer can use to support a controller they do **not** physically own. A
+useful capture records the exact probe-image pair, physical connection and
+activation order, USB descriptors, startup packets, host control traffic,
+endpoint OUT handshake, and real input reports. Firmware experiments may
+generate hypotheses, but the raw probe report—not an anecdotal “it worked once”
+result—is what another developer should be able to use to build compatible
+bins.
+
 ## What the recipient gets
 
-After one guided run, the tool creates two ZIP files:
+After one guided run, the tool creates one ZIP file:
 
-- `EMAIL_TO_DEVELOPER_....zip` — full raw trace, exact descriptors, packet
-  bytes, and a readable report. Email this privately to the firmware developer.
-- `PUBLIC_REDACTED_....zip` — controller serial, endpoint packet bytes,
-  control payloads, PC name, and COM port removed. This is safer to post.
+- `SEND_TO_OSO_CUTE_....zip` — full raw trace, exact descriptors, packet
+  bytes, and a readable report. Send this ZIP to oso_cute.
 
-The full bundle can contain controller serial or authentication traffic. Do
-not post it publicly.
+The tool opens the report folder when it finishes. The ZIP can contain
+controller serial or authentication traffic, so do not post it publicly.
 
 ## Requirements
 
@@ -34,12 +43,23 @@ not post it publicly.
 2. Run `Flash_Probe_Firmware.bat` and flash **both** probe images.
 3. Disconnect every cable for ten seconds.
 4. Double-click `Run_Controller_Probe.bat`.
-5. Follow the prompts exactly. The middle USB connection goes to the PC,
-   controller goes to USB3, and Xbox USB1 is connected last when prompted.
+5. Answer the controller questions first. The tool then records both tests in
+   one session:
+   - **Cold start:** USB2 → PC and USB3 → controller are connected before the
+     tool arms the capture. USB1 → console or main PC is connected last; it
+     powers Left and makes COM5 usable. After the countdown, the tool opens
+     COM5 automatically and starts the probe checks without another Enter key.
+   - **Controller hot-plug:** USB2 → PC and USB1 → target host stay connected.
+     The tool records the controller being unplugged and then reconnected to
+     USB3.
+
+   Use an Xbox for an Xbox/GIP handshake diagnosis. A PC produces a useful
+   comparison capture but cannot prove the Xbox handshake.
 6. Perform each requested stick/button action.
 7. Find the finished ZIPs under `Controller_Probe_Reports`.
 8. Email the `EMAIL_TO_DEVELOPER_...zip` privately.
-9. Restore normal gameplay firmware after the capture if desired.
+9. Send the `SEND_TO_OSO_CUTE_...zip` file to oso_cute.
+10. Restore normal gameplay firmware after the capture if desired.
 
 ## Command-line use
 
@@ -69,10 +89,10 @@ python controller_probe.py --analyze raw_serial.log --controller-name "GameSir G
 - Exact device, configuration, and available string descriptors
 - Every interface, alternate setting, and endpoint declaration
 - Microsoft OS `0xEE`, qualifier, and other-speed probe results
-- Xbox control-transfer setup, completion status, and bounded data samples
+- Host control-transfer setup, completion status, and bounded data samples
 - Physical pre-mount startup packets
 - Change-only post-mount input samples, preventing 1 kHz log flooding
-- Xbox-to-controller endpoint OUT packets and completion status
+- Host-to-controller endpoint OUT packets and completion status
 - Mount/reset/announce-cache/replay state
 - IPC CRC failures and stale-control recoveries
 

@@ -137,22 +137,36 @@ static bool xbox_probe_target(void) {
            desc_device.idVendor == 0x045e && desc_device.idProduct == 0x0b12;
 }
 
+// Probe-only GameSir profile. The exact MSFT100 string and device-qualifier
+// STALL behavior were captured from the physical 3537:1003 controller.
+static bool g7_probe_mirror_target(void) {
+#if PROBE_MODE
+    return desc_device_valid && desc_config_valid &&
+           desc_device.idVendor == 0x3537 && desc_device.idProduct == 0x1003;
+#else
+    return false;
+#endif
+}
+
+static bool descriptor_mirror_target(void) {
+    return xbox_probe_target() || g7_probe_mirror_target();
+}
+
 // Probe builds query descriptor quirks on every attached device for evidence,
-// but the production mirroring callbacks below remain VID/PID-gated. This
-// records what a new controller does without silently changing Xbox behavior.
+// but normal firmware remains limited to the validated 045e:0b12 identity.
 static bool descriptor_probe_target(void) {
-    return xbox_probe_target() ||
+    return descriptor_mirror_target() ||
            (PROBE_MODE && desc_device_valid && desc_config_valid);
 }
 
 uint8_t const *tud_descriptor_device_qualifier_cb(void) {
-    if (!xbox_probe_target() || !desc_qualifier_valid) {
+    if (!descriptor_mirror_target() || !desc_qualifier_valid) {
         // The real device probe returned STALL. TinyUSB's generic failure
         // path calls dcd_edpt_stall() for EP0 OUT and then EP0 IN. Arm the
         // linker wrapper below so only this request's active IN data stage
         // is stalled; the setup/OUT half stays able to accept the host's
         // next control request.
-        qualifier_in_stall_only = xbox_probe_target();
+        qualifier_in_stall_only = descriptor_mirror_target();
         static const char miss[] = "[L][USB] QUALIFIER_MIRROR_MISS -> STALL\n";
         km_uart_write(miss, sizeof(miss) - 1);
         return NULL;
@@ -192,7 +206,7 @@ void __wrap_dcd_edpt_stall(uint8_t rhport, uint8_t ep_addr) {
 // can be used. Return the real device's pre-probed bytes exactly.
 uint16_t const *__real_tud_descriptor_string_cb(uint8_t index, uint16_t langid);
 uint16_t const *__wrap_tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
-    if (index == 0xee && xbox_probe_target() && desc_ms_os_string_valid) {
+    if (index == 0xee && descriptor_mirror_target() && desc_ms_os_string_valid) {
         char m[112];
         int n = snprintf(m, sizeof(m),
             "[L][USB] MS_OS_STRING_MIRROR_REPLY index=ee len=%u lang=%04x\n",
@@ -204,7 +218,7 @@ uint16_t const *__wrap_tud_descriptor_string_cb(uint8_t index, uint16_t langid) 
 }
 
 uint8_t const *tud_descriptor_other_speed_configuration_cb(uint8_t index) {
-    if (!xbox_probe_target() || !desc_other_speed_valid ||
+    if (!descriptor_mirror_target() || !desc_other_speed_valid ||
         index >= desc_device.bNumConfigurations ||
         desc_other_speed_len < sizeof(tusb_desc_configuration_t)) {
         return NULL;

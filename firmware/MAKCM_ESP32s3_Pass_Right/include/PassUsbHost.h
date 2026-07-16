@@ -42,6 +42,11 @@ public:
     // silently ignoring the PC collector's handshake.
     void probe_hello() const;
 
+    // Explicit diagnostic only. In a PROBE_MODE build, submits the legacy GIP
+    // identify/power/LED sequence once, and only for the detected G7 Pro.
+    // Normal firmware returns false without sending anything.
+    bool probe_g7_kickstart();
+
     bool is_ready() const { return ready_; }
 
 private:
@@ -96,8 +101,15 @@ private:
     bool     probe_last_valid_[16] = {false};
     uint8_t  probe_last_len_[16] = {0};
     uint8_t  probe_last_data_[16][64] = {{0}};
+    uint16_t probe_vid_ = 0;
+    uint16_t probe_pid_ = 0;
+    uint8_t  probe_g7_out_ep_ = 0;
+    bool     probe_g7_kick_sent_ = false;
+    bool     probe_g7_capture_armed_ = false;
+    int64_t  probe_last_capture_us_[16] = {0};
 
     void probe_reset();
+    void probe_rearm_input_capture();
     bool probe_should_log_in(uint8_t ep_addr, const uint8_t *data,
                              uint16_t len, bool mounted);
     void probe_log_packet(const char *direction, const char *phase,

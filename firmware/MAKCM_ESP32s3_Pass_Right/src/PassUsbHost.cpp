@@ -36,6 +36,8 @@ static void R_LOG_fmt(const char *fmt, ...) {
 
 #if PROBE_MODE
 static const uint16_t PROBE_HEX_CHUNK = 32;
+static const uint16_t PROBE_G7_VID = 0x3537;
+static const uint16_t PROBE_G7_PID = 0x1003;
 
 static const char *probe_speed_name(usb_speed_t speed) {
     return speed == USB_SPEED_LOW ? "low" : "full";
@@ -91,6 +93,59 @@ void PassUsbHost::probe_hello() const {
 #endif
 }
 
+bool PassUsbHost::probe_g7_kickstart() {
+#if PROBE_MODE
+    uint8_t ep = 0;
+    bool allowed = false;
+    bool start_controller = false;
+    portENTER_CRITICAL(&flow_lock);
+    allowed = device_connected_ && ready_ &&
+              probe_vid_ == PROBE_G7_VID && probe_pid_ == PROBE_G7_PID &&
+              probe_g7_out_ep_ != 0;
+    if (allowed) {
+        ep = probe_g7_out_ep_;
+        start_controller = !probe_g7_kick_sent_;
+        if (start_controller) probe_g7_kick_sent_ = true;
+    }
+    portEXIT_CRITICAL(&flow_lock);
+
+    if (!allowed) {
+        R_LOG("[PRB] G7_KICK denied vid=%04x pid=%04x ep=%02x connected=%u ready=%u already_sent=%u",
+              (unsigned)probe_vid_, (unsigned)probe_pid_,
+              (unsigned)probe_g7_out_ep_, (unsigned)device_connected_,
+              (unsigned)ready_, (unsigned)probe_g7_kick_sent_);
+        return false;
+    }
+
+    // A second explicit request is an evidence-only capture arm. It does not
+    // send any controller packets a second time; this lets the operator wait
+    // for the delayed G7 light, then collect paced raw reports while moving
+    // sticks/buttons.
+    if (!start_controller) {
+        probe_rearm_input_capture();
+        R_LOG("[PRB] G7_CAPTURE_ARM ep=%02x limit=128 interval_ms=100",
+              (unsigned)ep);
+        return true;
+    }
+
+    // Exact legacy v0.1 wire packets: identify, power-on, then LED-on.
+    // They are deliberately emitted only after an explicit PC request so the
+    // normal Xbox passthrough remains entirely host-owned.
+    static const uint8_t identify[] = {0x04, 0x20, 0x01, 0x00};
+    static const uint8_t power[]    = {0x05, 0x20, 0x02, 0x01, 0x00, 0x00};
+    static const uint8_t led[]      = {0x0a, 0x20, 0x03, 0x03, 0x00, 0x01, 0x14, 0x00};
+    bool identify_ok = submit_out(ep, identify, sizeof(identify));
+    bool power_ok    = submit_out(ep, power, sizeof(power));
+    bool led_ok      = submit_out(ep, led, sizeof(led));
+    R_LOG("[PRB] G7_KICK ep=%02x identify=%u power=%u led=%u",
+          (unsigned)ep, (unsigned)identify_ok, (unsigned)power_ok,
+          (unsigned)led_ok);
+    return identify_ok && power_ok && led_ok;
+#else
+    return false;
+#endif
+}
+
 #if PROBE_MODE
 void PassUsbHost::probe_reset() {
     probe_packet_id_ = 0;
@@ -101,12 +156,38 @@ void PassUsbHost::probe_reset() {
     memset(probe_last_valid_, 0, sizeof(probe_last_valid_));
     memset(probe_last_len_, 0, sizeof(probe_last_len_));
     memset(probe_last_data_, 0, sizeof(probe_last_data_));
+    probe_vid_ = 0;
+    probe_pid_ = 0;
+    probe_g7_out_ep_ = 0;
+    probe_g7_kick_sent_ = false;
+    probe_g7_capture_armed_ = false;
+    memset(probe_last_capture_us_, 0, sizeof(probe_last_capture_us_));
+}
+
+void PassUsbHost::probe_rearm_input_capture() {
+    probe_packet_samples_ = 0;
+    probe_premount_samples_ = 0;
+    memset(probe_last_valid_, 0, sizeof(probe_last_valid_));
+    memset(probe_last_len_, 0, sizeof(probe_last_len_));
+    memset(probe_last_data_, 0, sizeof(probe_last_data_));
+    memset(probe_last_capture_us_, 0, sizeof(probe_last_capture_us_));
+    probe_g7_capture_armed_ = true;
 }
 
 bool PassUsbHost::probe_should_log_in(uint8_t ep_addr, const uint8_t *data,
                                       uint16_t len, bool mounted) {
     if (!data || len == 0 || probe_packet_samples_ >= 128) return false;
     const uint8_t slot = ep_addr & 0x0f;
+    // G7 increments a report counter in every 0x20 packet, so ordinary
+    // change-only sampling would exhaust the evidence budget in milliseconds.
+    // Once the operator explicitly arms post-start capture, retain one exact
+    // packet per 100 ms for a useful 12.8-second button/stick window.
+    const int64_t now_us = esp_timer_get_time();
+    if (probe_g7_capture_armed_ && mounted &&
+        probe_last_capture_us_[slot] != 0 &&
+        now_us - probe_last_capture_us_[slot] < 100000) {
+        return false;
+    }
     uint16_t captured = len > sizeof(probe_last_data_[slot])
                       ? (uint16_t)sizeof(probe_last_data_[slot]) : len;
     bool changed = !probe_last_valid_[slot] ||
@@ -123,6 +204,9 @@ bool PassUsbHost::probe_should_log_in(uint8_t ep_addr, const uint8_t *data,
         // Constant-rate HID/XInput pads can report at 1 kHz. Change-only
         // sampling preserves user actions without swamping the 2 Mbps IPC.
         return false;
+    }
+    if (probe_g7_capture_armed_ && mounted) {
+        probe_last_capture_us_[slot] = now_us;
     }
     probe_packet_samples_++;
     return true;
@@ -302,6 +386,8 @@ bool PassUsbHost::fetch_and_relay_descriptors() {
           (unsigned)dev_desc->bDeviceClass, (unsigned)dev_desc->bDeviceSubClass,
           (unsigned)dev_desc->bDeviceProtocol, (unsigned)dev_desc->bcdDevice);
 #if PROBE_MODE
+    probe_vid_ = dev_desc->idVendor;
+    probe_pid_ = dev_desc->idProduct;
     probe_log_blob("desc", "device", 0, (const uint8_t *)dev_desc, 18);
 #endif
     ipc_send(FRAME_DESC_DEVICE, 0, 0, (const uint8_t *)dev_desc, 18);
@@ -384,6 +470,12 @@ bool PassUsbHost::fetch_and_relay_descriptors() {
         } else if (btyp == USB_B_DESCRIPTOR_TYPE_ENDPOINT && blen >= 7) {
             const usb_ep_desc_t *ed = (const usb_ep_desc_t *)p;
 #if PROBE_MODE
+            if (probe_vid_ == PROBE_G7_VID && probe_pid_ == PROBE_G7_PID &&
+                probe_if == 0 && probe_alt == 0 &&
+                !(ed->bEndpointAddress & USB_B_ENDPOINT_ADDRESS_EP_DIR_MASK) &&
+                (ed->bmAttributes & 0x03) == 0x03) {
+                probe_g7_out_ep_ = ed->bEndpointAddress;
+            }
             R_LOG("[PRB] EP interface=%u alt=%u address=%02x direction=%s attributes=%02x type=%s mps=%u interval=%u",
                   (unsigned)probe_if, (unsigned)probe_alt,
                   (unsigned)ed->bEndpointAddress,

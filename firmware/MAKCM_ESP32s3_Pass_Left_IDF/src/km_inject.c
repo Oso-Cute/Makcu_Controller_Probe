@@ -581,6 +581,25 @@ static void parse_km_text(const char *line, uint16_t len) {
         return;
     }
 
+    // Explicit controller-probe experiment. This command is intentionally
+    // unavailable in normal firmware and Right validates the exact G7 USB
+    // identity before it can submit any physical startup packets.
+    if (str_starts(buf, n, "km.g7kick(")) {
+#if PROBE_MODE
+        const uint8_t command = PROBE_CMD_G7_KICKSTART;
+        bool sent = ipc_send(FRAME_PROBE_COMMAND, 0, 0, &command, 1);
+        char response[96];
+        int rn = snprintf(response, sizeof(response),
+            "[PRB] G7_KICK_REQUEST side=L sent=%u\r\n", (unsigned)sent);
+        if (rn > 0) km_uart_write_raw(response, (size_t)rn);
+#else
+        static const char unavailable[] =
+            "[PRB] G7_KICK_REQUEST unavailable probe=0\r\n";
+        km_uart_write_raw(unavailable, sizeof(unavailable) - 1);
+#endif
+        return;
+    }
+
     // Accessibility: steady (tremor-damp) filter + telemetry toggles.
     if (str_starts(buf, n, "km.steady_a(")) {
         int v = 70; sscanf(buf + 12, "%d", &v);
@@ -886,8 +905,12 @@ void km_apply(uint8_t ep_addr, uint8_t *buf, uint16_t len) {
                        ep_addr, (unsigned)len, hex);
     }
 #endif
-    // GIP (Xbox One / Scuf / PowerA / Elite / GameSir) — IN EP 0x82, cmd 0x20 after 4B GIP header
-    if (ep_addr == 0x82 && len >= 20 && buf[0] == 0x20) {
+    // GIP (Xbox One / Scuf / PowerA / Elite / GameSir) — cmd 0x20 after 4B GIP
+    // header. Most GIP controllers stream input on IN EP 0x82, but the Xbox
+    // Elite (model 1698) uses EP 0x81 with the identical 0x20 report layout,
+    // so accept either endpoint. The XInput branch below is disjoint (it keys
+    // on buf[0]==0x00 && buf[1]==0x14), so allowing 0x81 here cannot steal it.
+    if ((ep_addr == 0x81 || ep_addr == 0x82) && len >= 20 && buf[0] == 0x20) {
         const uint8_t *gp = buf + 4;
         atomic_store(&tel_lx, (int32_t)rd_s16(gp + 6));
         atomic_store(&tel_ly, (int32_t)-rd_s16(gp + 8));

@@ -64,6 +64,9 @@ enum pass_ipc_type {
 
 enum pass_ipc_probe_command {
     PROBE_CMD_HELLO = 0x01,       // Ask Right to emit its structured build banner
+    // Explicit, probe-only G7 startup experiment. Right accepts it only for
+    // the identified GameSir G7 Pro (3537:1003), once per enumeration.
+    PROBE_CMD_G7_KICKSTART = 0x02,
 };
 
 enum pass_ipc_xfer_status {
