@@ -29,9 +29,11 @@ import serial.tools.list_ports
 
 
 # ---- self-contained merged images shipped beside this tool ------------------
+# MAKCM_LEFT_BIN / MAKCM_RIGHT_BIN override the defaults so launchers can
+# point at other image sets (e.g. the repo's firmware/rawbins probe images).
 _HERE = os.path.dirname(os.path.abspath(__file__))
-LEFT_BIN = os.path.join(_HERE, "Left", "MERGED_left.bin")
-RIGHT_BIN = os.path.join(_HERE, "Right", "MERGED_right.bin")
+LEFT_BIN = os.environ.get("MAKCM_LEFT_BIN") or os.path.join(_HERE, "Left", "MERGED_left.bin")
+RIGHT_BIN = os.environ.get("MAKCM_RIGHT_BIN") or os.path.join(_HERE, "Right", "MERGED_right.bin")
 
 # USB identities
 CH343_VID = 0x1A86            # middle command port (USB2)

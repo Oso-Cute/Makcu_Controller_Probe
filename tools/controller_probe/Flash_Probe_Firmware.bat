@@ -26,24 +26,33 @@ if errorlevel 1 (
   )
 )
 
+rem Shareable package: the flasher and merged images sit beside this file.
 set "FLASHER=%~dp0flash_probe_firmware.py"
+if exist "%FLASHER%" goto :run
 
-rem In the shareable package the flasher and merged images are beside this
-rem batch file.  In the source workbench, assemble that package from the
-rem existing LEFT_PROBE and RIGHT_PROBE build outputs first.
-if not exist "%FLASHER%" (
-  echo Preparing the probe firmware package from the current probe builds...
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_package.ps1" -SkipBuild
-  if errorlevel 1 (
-    echo.
-    echo Could not prepare the probe firmware package.
-    echo Build LEFT_PROBE and RIGHT_PROBE, then try again.
-    pause
-    exit /b 1
-  )
-  rem Pick the newest packaged version; the loop keeps the last match.
-  for /f "delims=" %%D in ('dir /b /ad /o:n "%~dp0..\..\dist\MAKCU_Controller_Probe_v*" 2^>nul') do set "FLASHER=%~dp0..\..\dist\%%D\flash_probe_firmware.py"
+rem Fresh repo clone: use the prebuilt merged probe images checked into
+rem firmware\rawbins with the repo flasher — no PlatformIO build needed.
+if exist "%~dp0..\..\firmware\rawbins\MERGED_left_PROBE.bin" if exist "%~dp0..\..\firmware\flash_tool.py" (
+  echo Using prebuilt probe images from firmware\rawbins.
+  set "FLASHER=%~dp0..\..\firmware\flash_tool.py"
+  set "MAKCM_LEFT_BIN=%~dp0..\..\firmware\rawbins\MERGED_left_PROBE.bin"
+  set "MAKCM_RIGHT_BIN=%~dp0..\..\firmware\rawbins\MERGED_right_PROBE.bin"
+  goto :run
 )
+
+rem Developer workbench: assemble the shareable package from the existing
+rem LEFT_PROBE and RIGHT_PROBE build outputs.
+echo Preparing the probe firmware package from the current probe builds...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_package.ps1" -SkipBuild
+if errorlevel 1 (
+  echo.
+  echo Could not prepare the probe firmware package.
+  echo Build LEFT_PROBE and RIGHT_PROBE, then try again.
+  pause
+  exit /b 1
+)
+rem Pick the newest packaged version; the loop keeps the last match.
+for /f "delims=" %%D in ('dir /b /ad /o:n "%~dp0..\..\dist\MAKCU_Controller_Probe_v*" 2^>nul') do set "FLASHER=%~dp0..\..\dist\%%D\flash_probe_firmware.py"
 
 if not exist "%FLASHER%" (
   echo Probe flasher was not found after packaging:
@@ -52,6 +61,7 @@ if not exist "%FLASHER%" (
   exit /b 1
 )
 
+:run
 %PY% "%FLASHER%"
 set "RC=%ERRORLEVEL%"
 echo.

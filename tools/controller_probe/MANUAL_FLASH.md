@@ -10,6 +10,16 @@ Left\MERGED_left.bin    → Left MCU  (USB1, left port)
 Right\MERGED_right.bin  → Right MCU (USB3, right port)
 ```
 
+If you cloned the repository instead of using the shareable ZIP, the probe
+images are at:
+
+```text
+firmware\rawbins\MERGED_left_PROBE.bin   → Left MCU
+firmware\rawbins\MERGED_right_PROBE.bin  → Right MCU
+```
+
+Substitute those paths in the commands below.
+
 Do not swap them.
 
 ## 0. Install esptool
