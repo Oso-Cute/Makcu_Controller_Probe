@@ -2,7 +2,7 @@
 """MAKCU Controller Probe collector and report generator.
 
 The live workflow talks to the CH343 middle port at 4 Mbaud, verifies that
-LEFT_PROBE and RIGHT_PROBE are installed, guides a controller/Xbox capture,
+LEFT_PROBE and RIGHT_PROBE are installed, guides a controller/host capture,
 then creates:
 
 * a full developer bundle containing the raw trace and exact USB bytes; and
@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 PROBE_SCHEMA = 1
 KM_BAUD = 4_000_000
 CH343_VID = 0x1A86
@@ -370,16 +370,16 @@ class ProbeParser:
             verdict = "Controller was detected, but its configuration descriptor was not captured."
             failure_stage = "descriptor_relay"
         elif not mounted:
-            verdict = "Descriptors were captured, but Xbox never mounted the mirrored device."
-            failure_stage = "xbox_enumeration"
+            verdict = "Descriptors were captured, but the host device never mounted the mirrored controller."
+            failure_stage = "host_enumeration"
         elif not out_packets:
-            verdict = "Xbox mounted the device but no endpoint-OUT handshake traffic was captured."
+            verdict = "The host device mounted the controller but no endpoint-OUT handshake traffic was captured."
             failure_stage = "startup_handshake"
         elif not gip_inputs:
-            verdict = "Xbox sent OUT traffic, but no standard GIP 0x20 input report was captured."
+            verdict = "The host device sent OUT traffic, but no standard GIP 0x20 input report was captured."
             failure_stage = "authentication_or_report_format"
         else:
-            verdict = "GIP announce, Xbox OUT traffic, and 0x20 input reports were captured."
+            verdict = "GIP announce, host OUT traffic, and 0x20 input reports were captured."
             failure_stage = "none_observed"
 
         report = {
@@ -480,6 +480,8 @@ def make_markdown_report(profile: dict[str, Any]) -> str:
         f"**Created (UTC):** {profile.get('created_utc', 'unknown')}  ",
         f"**Controller label:** {metadata.get('controller_name', 'unknown')}  ",
         f"**Variant/model:** {metadata.get('model', 'unknown')}  ",
+        f"**USB1 host:** {metadata.get('host_device', 'unknown')}  ",
+        f"**Capture sequence:** {metadata.get('capture_sequence', 'unknown')}  ",
         f"**Connection/mode:** {metadata.get('connection_mode', 'unknown')}  ",
         "",
         "## Automated result",
@@ -492,7 +494,7 @@ def make_markdown_report(profile: dict[str, Any]) -> str:
         "|---|---:|",
         f"| Matched probe firmware pair | {'Yes' if analysis['probe_pair_valid'] else 'No'} |",
         f"| Controller descriptor captured | {'Yes' if analysis['controller_detected'] else 'No'} |",
-        f"| Xbox target mounted | {'Yes' if analysis['target_mounted'] else 'No'} |",
+        f"| Host device mounted controller | {'Yes' if analysis['target_mounted'] else 'No'} |",
         f"| Startup announce seen | {'Yes' if analysis['announce_seen'] else 'No'} |",
         f"| Announce replayed | {'Yes' if analysis['announce_replayed'] else 'No'} |",
         f"| Endpoint OUT packets | {analysis['out_packet_count']} |",
@@ -500,6 +502,31 @@ def make_markdown_report(profile: dict[str, Any]) -> str:
         f"| IPC CRC failures | {analysis['crc_failure_count']} |",
         f"| Stale-control recoveries | {analysis['stale_timeout_count']} |",
         "",
+    ]
+
+    # Per-phase checkpoint timing (present in live captures from tool 1.1+).
+    # announce_to_mount_ms < 0 with no replay is the replay-race signature:
+    # the host mounted before the controller's announce was cached.
+    checkpoints = metadata.get("phase_checkpoints") or []
+    if checkpoints:
+        lines += [
+            "## Handshake timing per phase",
+            "",
+            "| Phase | Stage reached | Announce→mount (ms) | Replay | Host OUT |",
+            "|---|---|---:|---|---:|",
+        ]
+        for cp in checkpoints:
+            ms = cp.get("milestones", {})
+            delta = cp.get("announce_to_mount_ms")
+            lines.append(
+                f"| {cp.get('phase', '?')} | `{cp.get('stage', '?')}` | "
+                f"{delta if delta is not None else '—'} | "
+                f"{'Yes' if ms.get('announce_replay') else 'No'} | "
+                f"{cp.get('counts', {}).get('host_out', 0)} |"
+            )
+        lines.append("")
+
+    lines += [
         "## Device identity",
         "",
         f"- VID:PID: `{h(maybe_int(device.get('vid'), hex_value=True))}:{h(maybe_int(device.get('pid'), hex_value=True))}`",
@@ -588,19 +615,9 @@ def write_outputs(lines: list[str], profile: dict[str, Any], output_root: Path,
     raw_log.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
     full_json = session / "controller_profile_full.json"
-    redacted_json = session / "controller_profile_redacted.json"
-    report_md = session / "EMAIL_REPORT.md"
-    privacy = session / "PRIVACY_README.txt"
+    report_md = session / "REPORT.md"
     write_json(full_json, profile)
-    redacted = redacted_profile(profile)
-    write_json(redacted_json, redacted)
-    report_md.write_text(make_markdown_report(redacted), encoding="utf-8")
-    privacy.write_text(
-        "FULL DEVELOPER BUNDLE: private. May contain controller serial and "
-        "authentication/control bytes.\n"
-        "PUBLIC REDACTED BUNDLE: raw packet/control/serial bytes removed.\n",
-        encoding="utf-8",
-    )
+    report_md.write_text(make_markdown_report(profile), encoding="utf-8")
 
     descriptor_dir = session / "descriptors"
     descriptor_dir.mkdir()
@@ -614,16 +631,12 @@ def write_outputs(lines: list[str], profile: dict[str, Any], output_root: Path,
         name = f"g{blob.get('generation', 0)}_{slugify(str(blob.get('kind')))}_{slugify(str(blob.get('id')))}.bin"
         (descriptor_dir / name).write_bytes(data)
 
-    developer_zip = session / f"EMAIL_TO_DEVELOPER_{session_name}.zip"
-    public_zip = session / f"PUBLIC_REDACTED_{session_name}.zip"
-    zip_paths(developer_zip, session, [raw_log, full_json, redacted_json,
-                                       report_md, privacy, descriptor_dir])
-    zip_paths(public_zip, session, [redacted_json, report_md, privacy])
+    oso_zip = session / f"SEND_TO_OSO_CUTE_{session_name}.zip"
+    zip_paths(oso_zip, session, [raw_log, full_json, report_md, descriptor_dir])
     return {
         "session": session,
         "report": report_md,
-        "developer_zip": developer_zip,
-        "public_zip": public_zip,
+        "oso_zip": oso_zip,
     }
 
 
@@ -639,9 +652,10 @@ class SerialCapture:
         self.plain_lines: list[str] = []
         self._buffer = b""
 
-    def start(self) -> None:
+    def start(self, *, preserve_initial_data: bool = False) -> None:
         time.sleep(0.25)
-        self.serial.reset_input_buffer()
+        if not preserve_initial_data:
+            self.serial.reset_input_buffer()
         self._thread.start()
 
     def _append(self, text: str) -> None:
@@ -649,8 +663,6 @@ class SerialCapture:
         with self._lock:
             self.lines.append(stamped)
             self.plain_lines.append(text)
-        if "[PRB]" in text and not any(x in text for x in (" BLOB ", " PKT ")):
-            print("  ", text)
 
     def _reader(self) -> None:
         while not self._stop.is_set():
@@ -709,6 +721,80 @@ def find_ch343_port(explicit: str | None = None) -> str | None:
     return matches[0] if matches else None
 
 
+def open_serial_capture(args: argparse.Namespace, *, wait_for_port: bool = False,
+                        preserve_initial_data: bool = False) -> tuple[SerialCapture, str]:
+    """Open the CH343 port, optionally waiting for it to enumerate.
+
+    The CH343 shows up as soon as USB2 reaches the PC — the board itself
+    can still be dark (it powers from USB1). An open port with zero bytes
+    is therefore normal before USB1 is connected.
+    """
+    deadline = time.monotonic() + (30.0 if wait_for_port else 0.0)
+    last_error: Exception | None = None
+    next_status = time.monotonic()
+    if wait_for_port:
+        print("Waiting for the CH343 COM port (USB2 → PC)...", end="", flush=True)
+    while True:
+        port = find_ch343_port(args.port)
+        if port:
+            try:
+                capture = SerialCapture(port)
+                capture.start(preserve_initial_data=preserve_initial_data)
+                return capture, port
+            except Exception as exc:
+                last_error = exc
+        if not wait_for_port or time.monotonic() >= deadline:
+            if wait_for_port:
+                print(" not available")
+            detail = f" ({last_error})" if last_error else ""
+            raise RuntimeError(
+                "Could not open the CH343 middle port. Check the USB2 (middle) "
+                "cable to this PC" + detail
+            )
+        if time.monotonic() >= next_status:
+            print(".", end="", flush=True)
+            next_status = time.monotonic() + 1.0
+        time.sleep(0.25)
+
+
+def start_probe_collection(capture: SerialCapture, args: argparse.Namespace,
+                           *, wait_for_power: bool = False) -> None:
+    """Confirm the powered probe pair, then enable its structured telemetry."""
+    ready = False
+    if wait_for_power:
+        print("Waiting for USB1 power and the Left probe...", end="", flush=True)
+        deadline = time.monotonic() + 12.0
+        while time.monotonic() < deadline:
+            capture.send("km.version()")
+            if capture.wait_for(lambda x: "kmbox:" in x, 0.75):
+                ready = True
+                break
+            print(".", end="", flush=True)
+        print(" ready" if ready else " not found")
+    else:
+        capture.send("km.version()")
+        ready = capture.wait_for(lambda x: "kmbox:" in x, 2.5)
+    if not ready:
+        raise RuntimeError(
+            "The CH343 port opened, but Left did not answer km.version(). "
+            "Verify that USB1 is connected to a powered host."
+        )
+    capture.send("km.probe()")
+    left_ok = capture.wait_for(
+        lambda x: "[PRB] HELLO" in x and "side=L" in x and "probe=1" in x,
+        3.0,
+    )
+    right_ok = capture.wait_for(
+        lambda x: "[PRB] HELLO" in x and "side=R" in x and "probe=1" in x,
+        3.0,
+    )
+    if not left_ok and not args.allow_legacy:
+        raise RuntimeError("LEFT_PROBE is not installed (no probe=1 Left banner).")
+    if not right_ok and not args.allow_legacy:
+        raise RuntimeError("RIGHT_PROBE is not installed or IPC is unavailable.")
+    capture.send("km.telem(1)")
+
+
 def wait_with_message(seconds: float, message: str) -> None:
     print(message, end="", flush=True)
     deadline = time.monotonic() + seconds
@@ -716,6 +802,25 @@ def wait_with_message(seconds: float, message: str) -> None:
         time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
         print(".", end="", flush=True)
     print(" done")
+
+
+def connection_countdown(message: str, seconds: int = 3) -> None:
+    """Give the user an unambiguous, already-recording connection point."""
+    print(message)
+    for remaining in range(seconds, 0, -1):
+        print(f"  {remaining}...", flush=True)
+        time.sleep(1)
+    print("  Connect now.")
+
+
+def print_setup(title: str, lines: Iterable[str]) -> None:
+    width = 72
+    print("\n" + "=" * width)
+    print(title.center(width))
+    print("=" * width)
+    for line in lines:
+        print(line)
+    print("=" * width)
 
 
 def ask(prompt: str, default: str = "") -> str:
@@ -732,70 +837,213 @@ ACTION_STEPS = [
     "Move the LEFT stick in a full circle, then release it",
     "Move the RIGHT stick in a full circle, then release it",
     "Pull LT and RT separately, then release them",
-    "Press A, B, X, and Y separately",
+    "Press A (Cross/X), B (Circle/O), X (Square), and Y (Triangle) separately",
     "Press D-pad directions, LB, RB, Menu, and View separately",
 ]
 
 
+# Handshake milestones detected live from probe/diagnostic lines. Order
+# mirrors the passthrough pipeline; `critical` milestones gate a phase
+# checkpoint, the rest are informational. host_out is the decisive one:
+# zero host OUT packets after mount is the classic silent-failure stage.
+PHASE_MILESTONES = [
+    ("left_banner",     "Left probe banner",      lambda l: "[PRB] HELLO" in l and "side=L" in l),
+    ("right_banner",    "Right probe banner",     lambda l: "[PRB] HELLO" in l and "side=R" in l),
+    ("device_seen",     "Controller detected",    lambda l: "event=new_device" in l or "event=device_open" in l),
+    ("device_ready",    "Descriptors relayed",    lambda l: "event=device_ready" in l),
+    ("target_mount",    "Host mounted mirror",    lambda l: "event=target_mounted" in l),
+    ("announce_cached", "GIP announce cached",    lambda l: "event=announce_cached" in l or "ANNOUNCE_CACHED" in l),
+    ("announce_replay", "Announce replayed",      lambda l: "event=announce_replay" in l or "ANNOUNCE_REPLAY" in l),
+    ("host_out",        "Host OUT traffic",       lambda l: "[L][EP] OUT" in l),
+]
+CRITICAL_MILESTONES = {"device_seen", "device_ready"}
+
+
+def _stamp_of(stamped_line: str) -> str:
+    return stamped_line.split("\t", 1)[0] if "\t" in stamped_line else ""
+
+
+def _delta_ms(iso_a: str, iso_b: str) -> int | None:
+    try:
+        ta = datetime.fromisoformat(iso_a)
+        tb = datetime.fromisoformat(iso_b)
+        return int((tb - ta).total_seconds() * 1000)
+    except ValueError:
+        return None
+
+
+def phase_checkpoint(capture: SerialCapture, start_index: int,
+                     phase_name: str) -> dict[str, Any]:
+    """Scan lines captured since start_index and print a milestone table.
+
+    Returns a summary dict (also stored in the profile metadata) with the
+    first timestamp of each milestone, the mount-vs-announce ordering, and
+    a coarse failure-stage classification.
+    """
+    stamped = capture.snapshot_stamped()[start_index:]
+    found: dict[str, str] = {}
+    counts: dict[str, int] = Counter()
+    for line in stamped:
+        text = line.split("\t", 1)[1] if "\t" in line else line
+        for key, _label, match in PHASE_MILESTONES:
+            if match(text):
+                counts[key] += 1
+                found.setdefault(key, _stamp_of(line))
+
+    print(f"\n--- {phase_name}: capture checkpoint ---")
+    for key, label, _match in PHASE_MILESTONES:
+        mark = "OK " if key in found else "-- "
+        extra = f" x{counts[key]}" if counts.get(key, 0) > 1 else ""
+        print(f"  [{mark.strip():>2}] {label}{extra}")
+
+    stage = "complete"
+    if "device_seen" not in found:
+        stage = "no_physical_enumeration"
+    elif "device_ready" not in found:
+        stage = "descriptor_relay_failed"
+    elif "target_mount" not in found:
+        stage = "host_never_configured"
+    elif "host_out" not in found:
+        stage = "mounted_but_no_host_out"
+
+    mount_vs_announce = None
+    if "target_mount" in found and "announce_cached" in found:
+        delta = _delta_ms(found["announce_cached"], found["target_mount"])
+        if delta is not None:
+            mount_vs_announce = delta
+            if delta < 0 and "announce_replay" not in found:
+                print("  WARNING: host mounted BEFORE the announce was cached and")
+                print("  no replay was seen — replay-race signature (Case C).")
+    if stage == "mounted_but_no_host_out":
+        print("  NOTE: host configured the mirror but never sent OUT traffic.")
+        print("  This capture is the most valuable kind — keep it.")
+
+    return {
+        "phase": phase_name,
+        "stage": stage,
+        "milestones": {k: found.get(k) for k, _l, _m in PHASE_MILESTONES},
+        "counts": dict(counts),
+        "announce_to_mount_ms": mount_vs_announce,
+    }
+
+
+def checkpoint_gate(summary: dict[str, Any]) -> str:
+    """Ask how to proceed when a phase misses critical milestones."""
+    missing_critical = [k for k in CRITICAL_MILESTONES
+                        if not summary["milestones"].get(k)]
+    if not missing_critical:
+        return "continue"
+    print(f"  Missing critical milestone(s): {', '.join(missing_critical)}")
+    while True:
+        answer = ask("  [r]etry this phase, [c]ontinue anyway, or [a]bort", "r").lower()
+        if answer in ("r", "c", "a"):
+            return {"r": "retry", "c": "continue", "a": "abort"}[answer]
+
+
 def run_live(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
-    port = find_ch343_port(args.port)
-    if not port:
-        raise RuntimeError(
-            "No CH343 middle port found. Connect USB2 to this PC or pass --port COMx."
-        )
+    print_setup("CONTROLLER PROBE — 3 PHASES", [
+        "Phase 1  Cold start        — USB1 host connection is recorded last.",
+        "Phase 2  Controller replug — controller unplugged/reconnected while",
+        "                             USB1 stays connected.",
+        "Phase 3  Input mapping     — guided stick/button presses.",
+        "",
+        "After each phase the tool verifies what it actually captured and",
+        "offers a retry, so a cable fumble never wastes the whole session.",
+    ])
+
+    # Cables first, questions second: the serial port only needs USB2, so
+    # open it and start recording before anything else happens.
+    print_setup("SETUP — CONNECT THE RECORDING PORT", [
+        "[CONNECT NOW]",
+        "1. USB2 (middle) → this PC          (makes the COM port appear)",
+        "2. USB3 (right)  → controller",
+        "",
+        "[LEAVE DISCONNECTED]",
+        "3. USB1 (left)   → console/main PC  (the board stays dark until",
+        "                    USB1 is connected — that is normal)",
+    ])
+    input("When USB2 and USB3 are connected, press Enter...")
+    capture, port = open_serial_capture(
+        args, wait_for_port=True, preserve_initial_data=True)
+    print(f"\nRecording is LIVE on {port} at {KM_BAUD:,} baud.")
+
+    # Metadata interview happens while the port idles — dead time anyway.
     metadata = {
-        "controller_name": args.controller_name or ask("Controller name", "GameSir G7 Pro"),
-        "model": args.model or ask("Exact variant/rear-label model", "unknown"),
-        "connection_mode": args.connection_mode or ask(
-            "Connection and selected mode", "direct USB cable / Xbox wired mode"),
-        "notes": args.notes or ask("Optional notes", ""),
+        "controller_name": args.controller_name or ask(
+            "What controller is connected to USB3?") or "unknown_controller",
+        "model": args.model or ask(
+            "Model or rear-label text (optional; press Enter to skip)") or "unknown",
+        "host_device": ask(
+            "What will USB1 be connected to? (PC or which console)") or "unknown",
+        "capture_sequence": "cold start, controller replug, input mapping",
+        "connection_mode": args.connection_mode or "direct USB3 connection during probe",
+        "notes": args.notes or ask(
+            "Anything unusual to note? (optional; press Enter to skip)", ""),
         "computer": os.environ.get("COMPUTERNAME", "unknown"),
         "serial_port": port,
     }
+    phase_summaries: list[dict[str, Any]] = []
 
-    print(f"\nOpening {port} at {KM_BAUD:,} baud...")
-    capture = SerialCapture(port)
-    capture.start()
     try:
         capture.mark("SESSION_START")
-        capture.send("km.version()")
-        if not capture.wait_for(lambda x: "kmbox:" in x, 2.5):
-            raise RuntimeError(
-                "The CH343 port opened, but Left did not answer km.version(). "
-                "Verify board power and that USB2 is the middle port."
-            )
-        capture.send("km.probe()")
-        left_ok = capture.wait_for(
-            lambda x: "[PRB] HELLO" in x and "side=L" in x and "probe=1" in x,
-            3.0,
-        )
-        right_ok = capture.wait_for(
-            lambda x: "[PRB] HELLO" in x and "side=R" in x and "probe=1" in x,
-            3.0,
-        )
-        if not left_ok and not args.allow_legacy:
-            raise RuntimeError("LEFT_PROBE is not installed (no probe=1 Left banner).")
-        if not right_ok and not args.allow_legacy:
-            raise RuntimeError("RIGHT_PROBE is not installed or IPC is unavailable.")
-        capture.send("km.telem(1)")
 
-        print("\nCAPTURE 1 — physical controller enumeration")
-        print("Keep the MIDDLE USB2 cable connected to this PC.")
-        input("Unplug the controller from USB3 and unplug Xbox USB1, then press Enter...")
-        capture.mark("STAGE prepare controller_unplugged xbox_unplugged")
-        input("Now connect the controller directly to USB3 in Xbox/wired mode, then press Enter...")
-        capture.mark("STAGE controller_connected")
-        wait_with_message(7.0 if not args.quick else 3.0,
-                          "Capturing controller descriptors")
+        # ---- Phase 1: cold start (retryable) --------------------------------
+        while True:
+            phase_start = len(capture.snapshot_stamped())
+            capture.mark("PHASE_1_COLD_START usb1_connect_now")
+            connection_countdown(
+                "Phase 1 armed and recording. Connect USB1 to the console/main "
+                "PC when told.")
+            start_probe_collection(capture, args, wait_for_power=True)
+            # The boot banner and enumeration arrive within a few seconds of
+            # USB1 power; wait for device_ready instead of sleeping blind,
+            # then allow the host handshake to play out.
+            capture.wait_for(lambda x: "event=device_ready" in x,
+                             15.0 if not args.quick else 6.0)
+            wait_with_message(10.0 if not args.quick else 4.0,
+                              "Capturing host enumeration/handshake")
+            summary = phase_checkpoint(capture, phase_start, "Phase 1 cold start")
+            action = checkpoint_gate(summary)
+            if action == "retry":
+                print("Retrying Phase 1: unplug USB1, wait two seconds.")
+                input("When USB1 is unplugged, press Enter...")
+                capture.mark("PHASE_1_RETRY usb1_disconnected")
+                continue
+            phase_summaries.append(summary)
+            if action == "abort":
+                raise KeyboardInterrupt("aborted at Phase 1 checkpoint")
+            break
 
-        print("\nCAPTURE 2 — Xbox enumeration and handshake")
-        input("Connect USB1 to the powered-on Xbox LAST, then press Enter...")
-        capture.mark("STAGE xbox_connected_last")
-        wait_with_message(14.0 if not args.quick else 6.0,
-                          "Capturing Xbox enumeration/handshake")
+        # ---- Phase 2: controller replug (retryable) --------------------------
+        if not args.quick:
+            while True:
+                print_setup("PHASE 2 — CONTROLLER REPLUG", [
+                    "Keep USB1 and USB2 connected.",
+                    "Unplug the controller from USB3; the countdown tells you",
+                    "when to reconnect it. Recording never stops.",
+                ])
+                input("Unplug the controller from USB3, then press Enter...")
+                phase_start = len(capture.snapshot_stamped())
+                capture.mark("PHASE_2_REPLUG controller_disconnected")
+                wait_with_message(2.0, "Recording disconnected state")
+                connection_countdown(
+                    "Recording is active. Reconnect the controller to USB3 when told.")
+                capture.mark("PHASE_2_REPLUG controller_connect_now")
+                capture.wait_for(lambda x: "event=device_ready" in x, 15.0)
+                wait_with_message(10.0, "Capturing replug handshake")
+                summary = phase_checkpoint(capture, phase_start,
+                                           "Phase 2 controller replug")
+                action = checkpoint_gate(summary)
+                if action == "retry":
+                    continue
+                phase_summaries.append(summary)
+                if action == "abort":
+                    raise KeyboardInterrupt("aborted at Phase 2 checkpoint")
+                break
 
+        # ---- Phase 3: input mapping ------------------------------------------
         if not args.no_actions:
-            print("\nCAPTURE 3 — report mapping")
+            print("\nPHASE 3 — INPUT MAPPING")
             for index, instruction in enumerate(ACTION_STEPS, start=1):
                 capture.mark(f"ACTION_BEGIN {index} {instruction}")
                 input(f"{index}/{len(ACTION_STEPS)}: {instruction}. Press Enter when finished...")
@@ -813,6 +1061,7 @@ def run_live(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
             pass
         capture.stop()
 
+    metadata["phase_checkpoints"] = phase_summaries
     parser = ProbeParser()
     for line in capture.snapshot_plain():
         parser.process_line(line)
@@ -877,11 +1126,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print("\n" + "=" * 72)
+    print("DONE")
     print(profile["analysis"]["verdict"])
-    print(f"Report:           {outputs['report']}")
-    print(f"Email privately:  {outputs['developer_zip']}")
-    print(f"Safe to post:     {outputs['public_zip']}")
+    print(f"Please send this ZIP to oso_cute:\n{outputs['oso_zip']}")
+    print("Opening the folder...")
     print("=" * 72)
+    try:
+        os.startfile(str(outputs["session"]))  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        pass
     return 0
 
 
