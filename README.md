@@ -47,8 +47,9 @@ controller serial or authentication traffic, so do not post it publicly.
    one session:
    - **Cold start:** USB2 → PC and USB3 → controller are connected before the
      tool arms the capture. USB1 → console or main PC is connected last; it
-     powers Left and makes COM5 usable. After the countdown, the tool opens
-     COM5 automatically and starts the probe checks without another Enter key.
+     powers Left and makes the CH343 COM port usable. After the countdown, the
+     tool detects the port automatically and starts the probe checks without
+     another Enter key.
    - **Controller hot-plug:** USB2 → PC and USB1 → target host stay connected.
      The tool records the controller being unplugged and then reconnected to
      USB3.
@@ -56,10 +57,9 @@ controller serial or authentication traffic, so do not post it publicly.
    Use an Xbox for an Xbox/GIP handshake diagnosis. A PC produces a useful
    comparison capture but cannot prove the Xbox handshake.
 6. Perform each requested stick/button action.
-7. Find the finished ZIPs under `Controller_Probe_Reports`.
-8. Email the `EMAIL_TO_DEVELOPER_...zip` privately.
-9. Send the `SEND_TO_OSO_CUTE_...zip` file to oso_cute.
-10. Restore normal gameplay firmware after the capture if desired.
+7. Find the finished ZIP under `Controller_Probe_Reports`.
+8. Send the `SEND_TO_OSO_CUTE_...zip` file privately to oso_cute.
+9. Restore normal gameplay firmware after the capture if desired.
 
 ## Command-line use
 

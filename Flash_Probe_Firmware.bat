@@ -41,7 +41,8 @@ if not exist "%FLASHER%" (
     pause
     exit /b 1
   )
-  set "FLASHER=%~dp0..\..\dist\MAKCU_Controller_Probe_v1.0.0\flash_probe_firmware.py"
+  rem Pick the newest packaged version; the loop keeps the last match.
+  for /f "delims=" %%D in ('dir /b /ad /o:n "%~dp0..\..\dist\MAKCU_Controller_Probe_v*" 2^>nul') do set "FLASHER=%~dp0..\..\dist\%%D\flash_probe_firmware.py"
 )
 
 if not exist "%FLASHER%" (

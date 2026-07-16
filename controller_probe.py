@@ -3,10 +3,9 @@
 
 The live workflow talks to the CH343 middle port at 4 Mbaud, verifies that
 LEFT_PROBE and RIGHT_PROBE are installed, guides a controller/host capture,
-then creates:
-
-* a full developer bundle containing the raw trace and exact USB bytes; and
-* a redacted public bundle with serial/authentication material removed.
+then creates a full developer bundle containing the raw trace and exact USB
+bytes. The bundle may contain a controller serial number or authentication
+traffic, so it is meant to be sent privately, not posted publicly.
 
 An existing raw log can be re-analyzed with ``--analyze path.log`` without
 hardware or pyserial.
@@ -15,7 +14,6 @@ hardware or pyserial.
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import json
 import os
@@ -428,32 +426,6 @@ class ProbeParser:
         return report
 
 
-def redacted_profile(profile: dict[str, Any]) -> dict[str, Any]:
-    result = copy.deepcopy(profile)
-    for key in ("computer", "serial_port"):
-        if key in result.get("metadata", {}):
-            result["metadata"][key] = "[REDACTED]"
-    serial_index = maybe_int(result.get("device", {}).get("serial_index", -1))
-    for item in result.get("strings", []):
-        if item.get("index") == serial_index:
-            item["value"] = "[REDACTED]"
-            item["hex"] = "[REDACTED]"
-    for blob in result.get("descriptor_blobs", []):
-        is_serial = (blob.get("kind") == "string" and
-                     maybe_int(blob.get("id")) == serial_index)
-        is_control = blob.get("record") == "control"
-        if is_serial or is_control:
-            blob["hex"] = "[REDACTED]"
-    for packet in result.get("packets", []):
-        packet["hex"] = "[REDACTED]"
-    result["privacy"] = {
-        "redacted": True,
-        "removed": ["serial string bytes", "endpoint packet bytes",
-                    "control-transfer data bytes"],
-    }
-    return result
-
-
 def h(value: Any, width: int = 4) -> str:
     if isinstance(value, int):
         return f"{value:0{width}X}"
@@ -582,9 +554,7 @@ def make_markdown_report(profile: dict[str, Any]) -> str:
         "",
         "## Attachments and privacy",
         "",
-        "The accompanying **developer bundle** contains the complete raw serial trace, exact descriptors, and endpoint/control bytes needed for firmware analysis. It may also contain a controller serial number or authentication exchange; email it privately.",
-        "",
-        "The separately generated **public-redacted bundle** removes those raw bytes and is safer to post publicly.",
+        "The accompanying **developer bundle** contains the complete raw serial trace, exact descriptors, and endpoint/control bytes needed for firmware analysis. It may also contain a controller serial number or authentication exchange; send it privately and do not post it publicly.",
         "",
     ]
     return "\n".join(lines)
