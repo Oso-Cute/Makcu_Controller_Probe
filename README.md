@@ -40,7 +40,9 @@ controller serial or authentication traffic, so do not post it publicly.
 ## Recipient workflow
 
 1. Back up the currently working Left and Right firmware.
-2. Run `Flash_Probe_Firmware.bat` and flash **both** probe images.
+2. Run `Flash_Probe_Firmware.bat` and flash **both** probe images. If the
+   flasher fails, `MANUAL_FLASH.md` has step-by-step esptool commands for
+   the `Left` and `Right` image folders.
 3. Disconnect every cable for ten seconds.
 4. Double-click `Run_Controller_Probe.bat`.
 5. Answer the controller questions first. The tool then records both tests in

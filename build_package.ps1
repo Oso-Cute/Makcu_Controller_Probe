@@ -73,6 +73,7 @@ Copy-Item -LiteralPath (Join-Path $toolDir 'Run_Controller_Probe.bat') -Destinat
 Copy-Item -LiteralPath (Join-Path $toolDir 'Flash_Probe_Firmware.bat') -Destination $package
 Copy-Item -LiteralPath (Join-Path $toolDir 'requirements.txt') -Destination $package
 Copy-Item -LiteralPath (Join-Path $toolDir 'README.md') -Destination (Join-Path $package 'README_FIRST.md')
+Copy-Item -LiteralPath (Join-Path $toolDir 'MANUAL_FLASH.md') -Destination $package
 Copy-Item -LiteralPath (Join-Path $repo 'firmware\flash_tool.py') -Destination (Join-Path $package 'flash_probe_firmware.py')
 $gitCommit = (& git -C $repo rev-parse --short=12 HEAD 2>$null)
 if (-not $gitCommit) { $gitCommit = 'unknown' }
