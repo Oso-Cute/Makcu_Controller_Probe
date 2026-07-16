@@ -26,10 +26,34 @@ if errorlevel 1 (
   )
 )
 
-%PY% flash_probe_firmware.py
+set "FLASHER=%~dp0flash_probe_firmware.py"
+
+rem In the shareable package the flasher and merged images are beside this
+rem batch file.  In the source workbench, assemble that package from the
+rem existing LEFT_PROBE and RIGHT_PROBE build outputs first.
+if not exist "%FLASHER%" (
+  echo Preparing the probe firmware package from the current probe builds...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_package.ps1" -SkipBuild
+  if errorlevel 1 (
+    echo.
+    echo Could not prepare the probe firmware package.
+    echo Build LEFT_PROBE and RIGHT_PROBE, then try again.
+    pause
+    exit /b 1
+  )
+  set "FLASHER=%~dp0..\..\dist\MAKCU_Controller_Probe_v1.0.0\flash_probe_firmware.py"
+)
+
+if not exist "%FLASHER%" (
+  echo Probe flasher was not found after packaging:
+  echo   %FLASHER%
+  pause
+  exit /b 1
+)
+
+%PY% "%FLASHER%"
 set "RC=%ERRORLEVEL%"
 echo.
 if not "%RC%"=="0" echo Probe flasher exited with error %RC%.
 pause
 exit /b %RC%
-

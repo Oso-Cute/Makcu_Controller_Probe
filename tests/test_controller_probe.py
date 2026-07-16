@@ -81,29 +81,24 @@ class ProbeParserTests(unittest.TestCase):
                             for p in redacted["packets"]))
         report = make_markdown_report(redacted)
         self.assertNotIn("SERIAL123", report)
-        self.assertIn("GIP announce, Xbox OUT traffic", report)
+        self.assertIn("GIP announce, host OUT traffic", report)
 
-    def test_output_writes_private_and_public_bundles(self):
+    def test_output_writes_oso_bundle(self):
         profile = self.parse()
         with tempfile.TemporaryDirectory() as td:
             outputs = write_outputs(sample_lines(), profile, Path(td), "session")
-            self.assertTrue(outputs["developer_zip"].is_file())
-            self.assertTrue(outputs["public_zip"].is_file())
-            with zipfile.ZipFile(outputs["developer_zip"]) as zf:
+            self.assertTrue(outputs["oso_zip"].is_file())
+            with zipfile.ZipFile(outputs["oso_zip"]) as zf:
                 names = set(zf.namelist())
                 self.assertIn("raw_serial.log", names)
                 self.assertIn("controller_profile_full.json", names)
-            with zipfile.ZipFile(outputs["public_zip"]) as zf:
-                names = set(zf.namelist())
-                self.assertNotIn("raw_serial.log", names)
-                self.assertNotIn("controller_profile_full.json", names)
 
     def test_missing_mount_is_reported_as_enumeration_failure(self):
         parser = ProbeParser()
         for line in sample_lines()[:11]:
             parser.process_line(line)
         profile = parser.build_profile()
-        self.assertEqual(profile["analysis"]["failure_stage"], "xbox_enumeration")
+        self.assertEqual(profile["analysis"]["failure_stage"], "host_enumeration")
 
 
 if __name__ == "__main__":
