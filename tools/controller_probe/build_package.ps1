@@ -5,7 +5,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $toolDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = (Resolve-Path (Join-Path $toolDir '..\..')).Path
-$version = '1.0.0'
+# The tool version lives in one place: TOOL_VERSION in controller_probe.py.
+$versionMatch = Select-String -LiteralPath (Join-Path $toolDir 'controller_probe.py') -Pattern 'TOOL_VERSION = "([^"]+)"'
+if (-not $versionMatch) { throw 'TOOL_VERSION was not found in controller_probe.py' }
+$version = $versionMatch.Matches[0].Groups[1].Value
 $packageName = "MAKCU_Controller_Probe_v$version"
 $distRoot = Join-Path $repo 'dist'
 $package = Join-Path $distRoot $packageName

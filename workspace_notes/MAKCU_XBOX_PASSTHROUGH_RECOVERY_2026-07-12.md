@@ -1066,7 +1066,7 @@ Before declaring the build production-final, test:
 The patched source was archived before flashing:
 
 ```text
-C:\Users\mrqui\Documents\Projects\shared\makcu_stable-gip-sequencing-preflash-20260712.zip
+makcu_stable-gip-sequencing-preflash-20260712.zip  (archived locally)
 ```
 
 Archive properties:

@@ -2,7 +2,7 @@
 
 ## Source identity
 
-- Reference tree: `C:\Users\mrqui\Documents\Projects_2\Makcu\macku_controller`
+- Reference tree: local `macku_controller` working copy
 - Reference Git branch at copy time: `test-gui`
 - Reference `HEAD` at copy time: `ef53244`
 - Important: the verified Xbox recovery changes were uncommitted modifications on top of that commit. The workbench copied the actual working files, not merely `HEAD`.

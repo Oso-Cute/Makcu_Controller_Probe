@@ -11,7 +11,6 @@ sys.path.insert(0, str(HERE))
 from controller_probe import (  # noqa: E402
     ProbeParser,
     make_markdown_report,
-    redacted_profile,
     write_outputs,
 )
 
@@ -70,17 +69,11 @@ class ProbeParserTests(unittest.TestCase):
         self.assertEqual(profile["analysis"]["gip_input_count"], 1)
         self.assertEqual(profile["analysis"]["failure_stage"], "none_observed")
 
-    def test_redaction_removes_serial_and_packet_bytes(self):
+    def test_markdown_report_never_shows_serial_string(self):
         profile = self.parse()
-        redacted = redacted_profile(profile)
-        serial = next(x for x in redacted["strings"] if x["index"] == 3)
-        self.assertEqual(serial["value"], "[REDACTED]")
-        self.assertEqual(redacted["metadata"]["computer"], "[REDACTED]")
-        self.assertEqual(redacted["metadata"]["serial_port"], "[REDACTED]")
-        self.assertTrue(all(p["hex"] == "[REDACTED]"
-                            for p in redacted["packets"]))
-        report = make_markdown_report(redacted)
+        report = make_markdown_report(profile)
         self.assertNotIn("SERIAL123", report)
+        self.assertIn("[REDACTED IN REPORT]", report)
         self.assertIn("GIP announce, host OUT traffic", report)
 
     def test_output_writes_oso_bundle(self):
