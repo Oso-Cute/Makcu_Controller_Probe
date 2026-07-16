@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 PROBE_SCHEMA = 1
 KM_BAUD = 4_000_000
 CH343_VID = 0x1A86
@@ -579,17 +579,21 @@ def zip_paths(zip_path: Path, base: Path, paths: Iterable[Path]) -> None:
 
 def write_outputs(lines: list[str], profile: dict[str, Any], output_root: Path,
                   session_name: str) -> dict[str, Path]:
+    # Recipients only need to send one file, so the session folder ends up
+    # holding just the ZIP; the loose files exist only while it is built.
     session = output_root / session_name
     session.mkdir(parents=True, exist_ok=False)
-    raw_log = session / "raw_serial.log"
+    staging = session / "_staging"
+    staging.mkdir()
+    raw_log = staging / "raw_serial.log"
     raw_log.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
-    full_json = session / "controller_profile_full.json"
-    report_md = session / "REPORT.md"
+    full_json = staging / "controller_profile_full.json"
+    report_md = staging / "REPORT.md"
     write_json(full_json, profile)
     report_md.write_text(make_markdown_report(profile), encoding="utf-8")
 
-    descriptor_dir = session / "descriptors"
+    descriptor_dir = staging / "descriptors"
     descriptor_dir.mkdir()
     for blob in profile.get("descriptor_blobs", []):
         if blob.get("record") != "desc" or not blob.get("complete"):
@@ -602,10 +606,10 @@ def write_outputs(lines: list[str], profile: dict[str, Any], output_root: Path,
         (descriptor_dir / name).write_bytes(data)
 
     oso_zip = session / f"SEND_TO_OSO_CUTE_{session_name}.zip"
-    zip_paths(oso_zip, session, [raw_log, full_json, report_md, descriptor_dir])
+    zip_paths(oso_zip, staging, [raw_log, full_json, report_md, descriptor_dir])
+    shutil.rmtree(staging)
     return {
         "session": session,
-        "report": report_md,
         "oso_zip": oso_zip,
     }
 
@@ -964,6 +968,8 @@ def run_live(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
             connection_countdown(
                 "Phase 1 armed and recording. Connect USB1 to the console/main "
                 "PC when told.")
+            print("If the controller has not lit up a few seconds after USB1 is\n"
+                  "connected, press its power (Xbox/home) button once.")
             start_probe_collection(capture, args, wait_for_power=True)
             # The boot banner and enumeration arrive within a few seconds of
             # USB1 power; wait for device_ready instead of sleeping blind,
@@ -998,6 +1004,8 @@ def run_live(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
                 wait_with_message(2.0, "Recording disconnected state")
                 connection_countdown(
                     "Recording is active. Reconnect the controller to USB3 when told.")
+                print("If the controller stays dark after reconnecting, press its\n"
+                      "power (Xbox/home) button once.")
                 capture.mark("PHASE_2_REPLUG controller_connect_now")
                 capture.wait_for(lambda x: "event=device_ready" in x, 15.0)
                 wait_with_message(10.0, "Capturing replug handshake")
