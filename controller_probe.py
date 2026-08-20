@@ -812,7 +812,7 @@ ACTION_STEPS = [
     "Move the RIGHT stick in a full circle, then release it",
     "Pull LT and RT separately, then release them",
     "Press A (Cross/X), B (Circle/O), X (Square), and Y (Triangle) separately",
-    "Press D-pad directions, LB, RB, Menu, and View separately",
+    "Press D-pad directions, LB, RB, Menu, and View separately, one at a time",
 ]
 
 
@@ -963,8 +963,8 @@ def run_live(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
 
         # ---- Phase 1: cold start (retryable) --------------------------------
         while True:
-            input("Ready to connect USB1 and press the power button? "
-                  "Press Enter...")
+            input("Ready to connect USB1 and press the power button on the "
+                  "controller? Press Enter...")
             phase_start = len(capture.snapshot_stamped())
             capture.mark("PHASE_1_COLD_START usb1_connect_now")
             connection_countdown(
