@@ -40,14 +40,14 @@ controller serial or authentication traffic, so do not post it publicly.
 ## Recipient workflow
 
 1. Back up the currently working Left and Right firmware.
-2. Flash **both** probe images from the `firmware/` folder with an online
-   AIO ESP32 flasher (any browser-based esptool works). Both are complete
-   merged images written at flash offset `0x0`:
-   - `MERGED_left.bin`  → Left MCU  (USB1, left port)
-   - `MERGED_right.bin` → Right MCU (USB3, right port)
+2. Flash **both** probe images with the **MAKCU AIO tool**:
+   <https://github.com/terrafirma2021/MAKCU_AIO_PUBLIC>
+   - `firmware/MERGED_left.bin`  → Left MCU  (USB1, left port)
+   - `firmware/MERGED_right.bin` → Right MCU (USB3, right port)
 
-   Do not swap them. Put each MCU in download mode (hold its BOOT button
-   while plugging its USB), select the matching COM port, and write at `0x0`.
+   Do not swap them. Put a side into download mode first (hold its BOOT button
+   while plugging its USB), then in the AIO tool switch to **Offline** and use
+   **Flash Left / Flash Right** to pick the matching `.bin`.
 3. Disconnect every cable for ten seconds.
 4. Double-click `Run_Controller_Probe.bat`.
 5. Answer the controller questions first. The tool then records both tests in
@@ -70,7 +70,8 @@ controller serial or authentication traffic, so do not post it publicly.
 7. Find the finished ZIP under `Controller_Probe_Reports` — the session
    folder contains only the ZIP.
 8. Send the `SEND_TO_OSO_CUTE_...zip` file privately to oso_cute.
-9. Restore normal gameplay firmware after the capture if desired.
+9. Restore your normal gameplay firmware afterward with the same AIO tool if
+   desired.
 
 ## Command-line use
 
@@ -116,11 +117,8 @@ pio run -d firmware/MAKCM_ESP32s3_Pass_Left_IDF -e LEFT_PROBE
 pio run -d firmware/MAKCM_ESP32s3_Pass_Right -e RIGHT_PROBE
 ```
 
-The merged `tools/controller_probe/firmware/MERGED_left.bin` and
-`MERGED_right.bin` are the shippable probe images (also mirrored in
-`firmware/rawbins/`). The old custom-flasher packaging lives in
-`tools/controller_probe/flasher archived/` (git-ignored) if you need to
-regenerate it.
+The merged `firmware/MERGED_left.bin` and `firmware/MERGED_right.bin` are the
+shippable probe images. Flash them with the MAKCU AIO tool linked above.
 
 Run parser/report tests:
 
