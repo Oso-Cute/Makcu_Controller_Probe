@@ -110,18 +110,11 @@ python controller_probe.py --analyze raw_serial.log --controller-name "GameSir G
 
 ## Developer build
 
-From the repository root:
-
-```powershell
-pio run -d firmware/MAKCM_ESP32s3_Pass_Left_IDF -e LEFT_PROBE
-pio run -d firmware/MAKCM_ESP32s3_Pass_Right -e RIGHT_PROBE
-```
-
-The merged `firmware/MERGED_left.bin` and `firmware/MERGED_right.bin` are the
-shippable probe images. Flash them with the MAKCU AIO tool linked above.
+The prebuilt `firmware/MERGED_left.bin` and `firmware/MERGED_right.bin` are the
+shippable probe images — flash them with the MAKCU AIO tool linked above.
 
 Run parser/report tests:
 
 ```powershell
-python -m unittest discover -s tools/controller_probe/tests -v
+python -m unittest discover -s tests -v
 ```
